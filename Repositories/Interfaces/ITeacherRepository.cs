@@ -5,4 +5,6 @@ namespace QuranSchool.Api.Repositories.Interfaces;
 public interface ITeacherRepository : IRepository<Teacher>
 {
     Task<Teacher?> GetByUsernameAsync(string username);
+
+    Task<int> GetMaxRegistrationNumberAsync();
 }

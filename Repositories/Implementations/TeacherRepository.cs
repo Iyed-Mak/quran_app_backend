@@ -9,4 +9,7 @@ public class TeacherRepository(AppDbContext context) : Repository<Teacher>(conte
 {
     public async Task<Teacher?> GetByUsernameAsync(string username)
         => await _context.Teachers.FirstOrDefaultAsync(t => t.Username == username);
+
+    public async Task<int> GetMaxRegistrationNumberAsync()
+        => await _context.Teachers.MaxAsync(t => (int?)t.RegistrationNumber) ?? 0;
 }

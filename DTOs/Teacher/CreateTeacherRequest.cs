@@ -5,6 +5,9 @@ namespace QuranSchool.Api.DTOs.Teacher;
 /// <summary>بيانات إنشاء أستاذ جديد. كلمة المرور تُخزَّن بعد تشفيرها (bcrypt).</summary>
 public class CreateTeacherRequest
 {
+    /// <summary>يُولَّد تلقائيًا (أعلى رقم + 1) إذا لم يُمرَّر أو كان صفرًا.</summary>
+    public int? RegistrationNumber { get; set; }
+
     [Required(ErrorMessage = "الاسم الكامل مطلوب.")]
     [StringLength(150, MinimumLength = 3, ErrorMessage = "الاسم الكامل يجب أن يكون بين 3 و150 حرفًا.")]
     public string FullName { get; set; } = string.Empty;

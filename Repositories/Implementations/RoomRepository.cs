@@ -17,4 +17,15 @@ public class RoomRepository(AppDbContext context) : Repository<Room>(context), I
         => await _context.Rooms
             .Where(r => r.CampusId == campusId)
             .ExecuteDeleteAsync();
+
+    public async Task<bool> ExistsByNameAsync(string name, int? excludeId = null)
+    {
+        var trimmed = name.Trim();
+        var query = _context.Rooms.Where(r => r.Name.Trim().ToLower() == trimmed.ToLower());
+        if (excludeId.HasValue)
+        {
+            query = query.Where(r => r.Id != excludeId.Value);
+        }
+        return await query.AnyAsync();
+    }
 }

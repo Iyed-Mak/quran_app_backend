@@ -57,9 +57,16 @@ public class TeacherService(ITeacherRepository repository) : Service<Teacher>(re
             throw new BadRequestException("اسم المستخدم مستخدم بالفعل.");
         }
 
+        var registrationNumber = request.RegistrationNumber ?? 0;
+        if (registrationNumber <= 0)
+        {
+            registrationNumber = await repository.GetMaxRegistrationNumberAsync() + 1;
+        }
+
         var now = DateTime.UtcNow;
         var teacher = new Teacher
         {
+            RegistrationNumber = registrationNumber,
             FullName = request.FullName.Trim(),
             IsFemale = request.IsFemale,
             Phone = request.Phone?.Trim() ?? string.Empty,
@@ -119,6 +126,10 @@ public class TeacherService(ITeacherRepository repository) : Service<Teacher>(re
         existing.Phone = request.Phone?.Trim() ?? string.Empty;
         existing.DateOfBirth = request.DateOfBirth.Value;
         existing.Username = request.Username.Trim();
+        if (request.RegistrationNumber is > 0)
+        {
+            existing.RegistrationNumber = request.RegistrationNumber.Value;
+        }
         if (!string.IsNullOrWhiteSpace(request.Password))
         {
             existing.Password = BCrypt.Net.BCrypt.HashPassword(request.Password);

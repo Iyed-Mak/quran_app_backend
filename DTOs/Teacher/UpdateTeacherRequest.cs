@@ -6,6 +6,8 @@ namespace QuranSchool.Api.DTOs.Teacher;
 /// وتُرسل قيمة جديدة لتغييرها (تُشفَّر bcrypt قبل الحفظ).</summary>
 public class UpdateTeacherRequest
 {
+    public int? RegistrationNumber { get; set; }
+
     [Required(ErrorMessage = "الاسم الكامل مطلوب.")]
     [StringLength(150, MinimumLength = 3, ErrorMessage = "الاسم الكامل يجب أن يكون بين 3 و150 حرفًا.")]
     public string FullName { get; set; } = string.Empty;

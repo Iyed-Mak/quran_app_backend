@@ -6,6 +6,11 @@ namespace QuranSchool.Api.Models;
 public class Teacher : IUserAccount
 {
     public int Id { get; set; }
+
+    /// <summary>الرقم التسلسلي للمعلم (مستقل عن معرّف قاعدة البيانات).
+    /// يُولَّد تلقائيًا عند الإنشاء بقيمة أعلى رقم + 1.</summary>
+    public int RegistrationNumber { get; set; }
+
     public string FullName { get; set; } = string.Empty;
     public bool IsFemale { get; set; }
     public string Phone { get; set; } = string.Empty;
