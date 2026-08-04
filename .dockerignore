@@ -1,0 +1,11 @@
+bin/
+obj/
+.git/
+.vs/
+.vscode/
+Dockerfile*
+README*
+*.user
+*.suo
+*.db
+*.log
