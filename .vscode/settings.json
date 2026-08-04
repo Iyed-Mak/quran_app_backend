@@ -1,0 +1,11 @@
+{
+  "json.schemas": [
+    {
+      "fileMatch": ["/appsettings*.json"],
+      "schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  ]
+}

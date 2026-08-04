@@ -479,7 +479,7 @@ namespace QuranSchool.Api.Migrations
                         .HasColumnType("text")
                         .HasColumnName("name");
 
-                    b.Property<int>("TeacherId")
+                    b.Property<int?>("TeacherId")
                         .HasColumnType("integer")
                         .HasColumnName("teacher_id");
 
@@ -1247,7 +1247,6 @@ namespace QuranSchool.Api.Migrations
                         .WithMany("Groups")
                         .HasForeignKey("TeacherId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
                         .HasConstraintName("fk_group_teacher_teacher_id");
 
                     b.Navigation("AcademicYear");

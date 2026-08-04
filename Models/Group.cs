@@ -8,7 +8,7 @@ public class Group : IEntity
 {
     public int Id { get; set; }
     public int AcademicYearId { get; set; }
-    public int TeacherId { get; set; }
+    public int? TeacherId { get; set; }
     public string Name { get; set; } = string.Empty;
     public bool IsFemale { get; set; }
     public string? Description { get; set; }
@@ -18,7 +18,7 @@ public class Group : IEntity
     [ValidateNever]
     public AcademicYear AcademicYear { get; set; } = null!;
     [ValidateNever]
-    public Teacher Teacher { get; set; } = null!;
+    public Teacher? Teacher { get; set; }
     public List<Student> Students { get; set; } = new();
     public List<Exam> Exams { get; set; } = new();
     public List<StudySchedule> StudySchedules { get; set; } = new();

@@ -11,4 +11,19 @@ public class GroupService(IGroupRepository repository) : Service<Group>(reposito
 
     public async Task<List<Group>> GetByTeacherAsync(int teacherId)
         => await repository.GetByTeacherAsync(teacherId);
+
+    public override async Task<Group> CreateAsync(Group entity)
+    {
+        entity.TeacherId = NormalizeTeacher(entity.TeacherId);
+        return await base.CreateAsync(entity);
+    }
+
+    public override async Task UpdateAsync(Group entity)
+    {
+        entity.TeacherId = NormalizeTeacher(entity.TeacherId);
+        await base.UpdateAsync(entity);
+    }
+
+    private static int? NormalizeTeacher(int? teacherId)
+        => teacherId == 0 ? null : teacherId;
 }

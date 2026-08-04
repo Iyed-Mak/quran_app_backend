@@ -92,6 +92,7 @@ builder.Services.AddCors(options =>
     });
 });
 
+
 builder.Services.AddAutoMapper(typeof(Program).Assembly);
 builder.Services.AddSignalR();
 

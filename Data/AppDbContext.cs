@@ -70,6 +70,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasOne(g => g.Teacher)
             .WithMany(t => t.Groups)
             .HasForeignKey(g => g.TeacherId)
+            .IsRequired(false)
             .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<Student>()
