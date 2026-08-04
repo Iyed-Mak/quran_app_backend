@@ -1,0 +1,6 @@
+@QuranSchool.Api_HostAddress = http://localhost:5038
+
+GET {{QuranSchool.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
