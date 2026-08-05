@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="../buildMultiTargeting/QuranSchool.Api.props" />
-</Project>

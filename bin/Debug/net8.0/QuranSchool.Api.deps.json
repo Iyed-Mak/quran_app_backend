@@ -14,7 +14,7 @@
           "Microsoft.AspNetCore.Authentication.JwtBearer": "8.0.26",
           "Microsoft.AspNetCore.OpenApi": "8.0.29",
           "Microsoft.EntityFrameworkCore": "8.0.26",
-          "Microsoft.EntityFrameworkCore.Tools": "10.0.10",
+          "Microsoft.EntityFrameworkCore.Tools": "8.0.26",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "8.0.11",
           "Swashbuckle.AspNetCore": "8.1.0"
         },
@@ -376,7 +376,7 @@
           }
         }
       },
-      "Microsoft.EntityFrameworkCore.Tools/10.0.10": {
+      "Microsoft.EntityFrameworkCore.Tools/8.0.26": {
         "dependencies": {
           "Microsoft.EntityFrameworkCore.Design": "8.0.26"
         }
@@ -857,12 +857,12 @@
       "path": "microsoft.entityframeworkcore.relational/8.0.26",
       "hashPath": "microsoft.entityframeworkcore.relational.8.0.26.nupkg.sha512"
     },
-    "Microsoft.EntityFrameworkCore.Tools/10.0.10": {
+    "Microsoft.EntityFrameworkCore.Tools/8.0.26": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-oFNTteHcfnftdV9a+4Psed+HV95YKnNrPF8F2+nHtvdOVDfdcbNqKE7xYutOquo1cuBAs84Lq5Boh49ANnF4zQ==",
-      "path": "microsoft.entityframeworkcore.tools/10.0.10",
-      "hashPath": "microsoft.entityframeworkcore.tools.10.0.10.nupkg.sha512"
+      "sha512": "sha512-s2GxoyfDWIg57LUXzxJkKp2vIch3lUQ/qNrkEO00mPYaMjICueBMXkC1T0HqiKr1CUfR0M1jI/yhvt7GAo7WJA==",
+      "path": "microsoft.entityframeworkcore.tools/8.0.26",
+      "hashPath": "microsoft.entityframeworkcore.tools.8.0.26.nupkg.sha512"
     },
     "Microsoft.Extensions.ApiDescription.Server/6.0.5": {
       "type": "package",

@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="../build/QuranSchool.Api.props" />
-</Project>
