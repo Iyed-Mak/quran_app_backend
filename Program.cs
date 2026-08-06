@@ -55,7 +55,12 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
+    options.UseNpgsql(
+            builder.Configuration.GetConnectionString("DefaultConnection"),
+            npgsql => npgsql.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(10),
+                errorCodesToAdd: null))
            .UseSnakeCaseNamingConvention());
 
 var jwtSettings = builder.Configuration.GetSection("Jwt");
@@ -142,11 +147,43 @@ builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 
 var app = builder.Build();
 
-// Apply pending EF migrations automatically on startup.
+// Apply pending EF migrations automatically on startup, but never let a
+// transient database outage (e.g. a paused or cold-starting managed Postgres
+// on Render) kill the whole process. Retry with a backoff; if the database
+// is still unreachable after all attempts, start anyway so the /health
+// endpoint reports the true status and the app can recover once the DB is
+// back instead of crash-looping the service into a stopped state.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    const int maxAttempts = 5;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        try
+        {
+            db.Database.Migrate();
+            break;
+        }
+        catch (Exception ex)
+        {
+            if (attempt == maxAttempts)
+            {
+                logger.LogCritical(
+                    ex,
+                    "Database migration failed after {Attempt}/{Max} attempts. " +
+                    "Continuing to start; /health will report the database status.",
+                    attempt, maxAttempts);
+                break;
+            }
+
+            logger.LogError(
+                ex,
+                "Database migration attempt {Attempt}/{Max} failed. Retrying in {Delay} seconds...",
+                attempt, maxAttempts, 10);
+            await Task.Delay(TimeSpan.FromSeconds(10));
+        }
+    }
 }
 
 // Configure the HTTP request pipeline.
@@ -156,7 +193,10 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseHttpsRedirection();
+// NOTE: no UseHttpsRedirection here on purpose. The container only binds HTTP
+// (ASPNETCORE_URLS=http://+:8080) and TLS is terminated by the Render load
+// balancer, so a redirect to an https port that doesn't exist would be a no-op
+// and could break proxied requests.
 
 app.UseCors("AllowFrontend");
 
@@ -169,7 +209,18 @@ app.MapControllers();
 app.MapHub<NotificationHub>(NotificationHub.HubRoute);
 
 app.MapGet("/health", async (AppDbContext db) =>
-    await db.Database.CanConnectAsync() ? Results.Ok("Database connected") : Results.Problem("Database unavailable"))
+{
+    try
+    {
+        return await db.Database.CanConnectAsync()
+            ? Results.Ok("Database connected")
+            : Results.Problem("Database unavailable");
+    }
+    catch (Exception)
+    {
+        return Results.Problem("Database unavailable");
+    }
+})
     .WithName("GetHealth")
     .WithOpenApi();
 
