@@ -1,0 +1,20 @@
+name: Keep Render service awake
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render /health
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 \
+            https://quran-app-backend-o43e.onrender.com/health || echo 000)
+          echo "health check HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::Render health check returned $code"
+            exit 1
+          fi
