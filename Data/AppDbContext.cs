@@ -27,6 +27,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<NotificationReceiver> NotificationReceivers => Set<NotificationReceiver>();
     public DbSet<RevokedToken> RevokedTokens => Set<RevokedToken>();
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
+    public DbSet<DatabaseBackup> DatabaseBackups => Set<DatabaseBackup>();
+    public DbSet<DatabaseBackupSetting> DatabaseBackupSettings => Set<DatabaseBackupSetting>();
+    public DbSet<BackupAuditLog> BackupAuditLogs => Set<BackupAuditLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

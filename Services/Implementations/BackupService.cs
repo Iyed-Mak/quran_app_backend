@@ -1,0 +1,506 @@
+using System.Diagnostics;
+using QuranSchool.Api.DTOs.DatabaseBackup;
+using QuranSchool.Api.Exceptions;
+using QuranSchool.Api.Models;
+using QuranSchool.Api.Repositories.Interfaces;
+using QuranSchool.Api.Services.Interfaces;
+
+namespace QuranSchool.Api.Services.Implementations;
+
+/// <summary>
+/// منطق النسخ الاحتياطي والاستعادة عبر أدوات PostgreSQL الأصلية
+/// (pg_dump / pg_restore) مع تخزين الملفات عبر [IBackupStorage] المستقل
+/// عن بيئة الاستضافة. يضمن عدم تنفيذ أكثر من عملية نسخ/استعادة في نفس
+/// الوقت، ويطبّق سياسة الاحتفاظ بالنسخ، ويسجّل كل إجراء في سجل التدقيق.
+/// </summary>
+public class BackupService(
+    IDatabaseBackupRepository repository,
+    IBackupStorage storage,
+    IConfiguration configuration,
+    ILogger<BackupService> logger) : IBackupService
+{
+    /// <summary>قفل يمنع تشغيل أكثر من عملية نسخ/استعادة واحدة في نفس اللحظة.</summary>
+    private static readonly SemaphoreSlim OperationLock = new(1, 1);
+
+    public async Task<List<DatabaseBackupDto>> GetBackupsAsync()
+        => (await repository.GetAllAsync()).Select(MapToDto).ToList();
+
+    public async Task<BackupSummaryDto> GetSummaryAsync()
+    {
+        var backups = await repository.GetAllAsync();
+        var settings = await repository.GetSettingAsync();
+        var last = backups.FirstOrDefault(b => b.Status == "Success");
+
+        return new BackupSummaryDto
+        {
+            LastBackupDate = last?.CreatedDate,
+            LastBackupFileName = last?.FileName,
+            NextScheduledBackup = settings is { IsEnabled: true } ? settings.NextRunAt : null,
+            AutomaticBackupEnabled = settings?.IsEnabled ?? false,
+            TotalBackups = backups.Count,
+            TotalSize = backups.Sum(b => b.FileSize),
+            BackupDirectory = storage.DirectoryPath
+        };
+    }
+
+    public async Task<DatabaseBackupDto> CreateBackupAsync(int adminId, string adminName)
+    {
+        await OperationLock.WaitAsync();
+        try
+        {
+            await RunBackupAsync("Manual", adminId, adminName);
+            var latest = await repository.GetLatestAsync();
+            return MapToDto(latest ?? throw new BadRequestException("تعذر تسجيل النسخة الاحتياطية."));
+        }
+        catch (BadRequestException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Manual backup failed unexpectedly");
+            throw new BadRequestException("فشل إنشاء النسخة الاحتياطية. حاول مرة أخرى.");
+        }
+        finally
+        {
+            OperationLock.Release();
+        }
+    }
+
+    public async Task<(byte[] Data, string FileName)> DownloadAsync(int backupId, int adminId, string adminName)
+    {
+        var backup = await GetExistingAsync(backupId);
+        if (backup.Status != "Success")
+        {
+            throw new BadRequestException("لا يمكن تنزيل نسخة احتياطية فاشلة.");
+        }
+
+        byte[] data;
+        try
+        {
+            data = await storage.ReadAsync(backup.FileName);
+        }
+        catch (FileNotFoundException)
+        {
+            throw new NotFoundException("ملف النسخة الاحتياطية غير موجود على الخادم.");
+        }
+
+        await LogAuditAsync("Download", backup, adminId, adminName, null);
+        return (data, backup.FileName);
+    }
+
+    public async Task RestoreAsync(int backupId, int adminId, string adminName)
+    {
+        var backup = await GetExistingAsync(backupId);
+        if (backup.Status != "Success")
+        {
+            throw new BadRequestException("لا يمكن استعادة نسخة احتياطية فاشلة.");
+        }
+
+        var filePath = storage.GetAbsolutePath(backup.FileName);
+        if (!File.Exists(filePath))
+        {
+            throw new NotFoundException("ملف النسخة الاحتياطية غير موجود على الخادم.");
+        }
+
+        await OperationLock.WaitAsync();
+        try
+        {
+            var (host, port, db, user, password, sslMode) = GetDbInfo();
+            var psi = new ProcessStartInfo("pg_restore")
+            {
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            psi.EnvironmentVariables["PGPASSWORD"] = password;
+            if (sslMode.Length > 0)
+            {
+                psi.EnvironmentVariables["PGSSLMODE"] = sslMode;
+            }
+            foreach (var arg in new[]
+            {
+                "-h", host, "-p", port, "-U", user, "-d", db,
+                "--clean", "--if-exists", "--no-owner", "--no-privileges",
+                "--exit-on-error", "-Fc", filePath
+            })
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            var process = Process.Start(psi)
+                ?? throw new BadRequestException("تعذر تشغيل pg_restore. تأكد من تثبيت أدوات PostgreSQL.");
+            var stderr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            var succeeded = process.ExitCode == 0;
+            backup.RestoreDate = DateTime.UtcNow;
+            backup.RestoredBy = adminId;
+            backup.RestoreStatus = succeeded ? "Success" : "Failed";
+            await repository.SaveChangesAsync();
+            await LogAuditAsync("Restore", backup, adminId, adminName, succeeded ? null : stderr.Trim());
+
+            if (!succeeded)
+            {
+                logger.LogError("pg_restore failed: {Stderr}", stderr);
+                throw new BadRequestException("فشلت عملية الاستعادة: " + Shorten(stderr, 500));
+            }
+        }
+        finally
+        {
+            OperationLock.Release();
+        }
+    }
+
+    public async Task DeleteAsync(int backupId, int adminId, string adminName)
+    {
+        var backup = await GetExistingAsync(backupId);
+        await storage.DeleteAsync(backup.FileName);
+        await repository.DeleteAsync(backup);
+        await repository.SaveChangesAsync();
+        await LogAuditAsync("Delete", backup, adminId, adminName, null);
+    }
+
+    public async Task<BackupSettingsDto> GetSettingsAsync()
+        => MapSettings(await repository.GetSettingAsync());
+
+    public async Task<BackupSettingsDto> UpdateSettingsAsync(BackupSettingsDto dto, int adminId, string adminName)
+    {
+        ValidateSettings(dto);
+
+        var setting = await repository.GetSettingAsync();
+        if (setting is null)
+        {
+            setting = new DatabaseBackupSetting();
+            setting.Id = 0;
+        }
+
+        setting.IsEnabled = dto.IsEnabled;
+        setting.Frequency = dto.Frequency;
+        setting.BackupTime = dto.BackupTime;
+        setting.MaxBackupsToKeep = dto.MaxBackupsToKeep;
+        setting.UpdatedAt = DateTime.UtcNow;
+        setting.UpdatedBy = adminId;
+        setting.NextRunAt = ComputeNextRun(DateTime.UtcNow, dto.Frequency, dto.BackupTime, setting.LastRunAt);
+
+        await repository.SaveSettingAsync(setting);
+        await repository.SaveChangesAsync();
+        await LogAuditAsync("UpdateSettings", null, adminId, adminName,
+            $"is_enabled={dto.IsEnabled}; frequency={dto.Frequency}; time={dto.BackupTime}; keep={dto.MaxBackupsToKeep}");
+
+        return MapSettings(await repository.GetSettingAsync());
+    }
+
+    public async Task<List<BackupAuditLogDto>> GetAuditLogsAsync(int limit = 50)
+        => (await repository.GetAuditLogsAsync(limit))
+            .Select(l => new BackupAuditLogDto
+            {
+                Id = l.Id,
+                BackupId = l.BackupId,
+                BackupFileName = l.BackupFileName,
+                Action = l.Action,
+                PerformedByName = l.PerformedByName,
+                PerformedAt = l.PerformedAt,
+                Details = l.Details
+            })
+            .ToList();
+
+    public async Task RunScheduledBackupIfDueAsync()
+    {
+        var setting = await repository.GetSettingAsync();
+        if (setting is null || !setting.IsEnabled || setting.NextRunAt is null)
+        {
+            return;
+        }
+
+        if (DateTime.UtcNow < setting.NextRunAt)
+        {
+            return;
+        }
+
+        try
+        {
+            await OperationLock.WaitAsync();
+            try
+            {
+                await RunBackupAsync("Automatic", null, "تلقائي");
+                setting.LastRunAt = DateTime.UtcNow;
+                setting.NextRunAt = ComputeNextRun(DateTime.UtcNow, setting.Frequency, setting.BackupTime, setting.LastRunAt);
+            }
+            finally
+            {
+                OperationLock.Release();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Automatic backup failed; scheduling a retry in one hour");
+            setting.NextRunAt = DateTime.UtcNow.AddHours(1);
+        }
+
+        try
+        {
+            await repository.SaveSettingAsync(setting);
+            await repository.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to persist backup settings after automatic run");
+        }
+    }
+
+    // ───────────────────────────── private ─────────────────────────────
+
+    private async Task RunBackupAsync(string backupType, int? adminId, string adminName)
+    {
+        string fileName = string.Empty;
+        string filePath = string.Empty;
+
+        try
+        {
+            (fileName, filePath, var size) = await RunPgDumpAsync();
+
+            var backup = new DatabaseBackup
+            {
+                FileName = fileName,
+                FilePath = filePath,
+                FileSize = size,
+                CreatedDate = DateTime.UtcNow,
+                BackupType = backupType,
+                Status = "Success",
+                CreatedBy = adminId,
+                CreatedByName = adminName
+            };
+
+            await repository.AddAsync(backup);
+            await repository.SaveChangesAsync();
+            await LogAuditAsync("Create", backup, adminId, adminName, null);
+            await EnforceRetentionAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Backup ({Type}) failed", backupType);
+
+            try
+            {
+                if (filePath.Length > 0 && File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+            }
+            catch
+            {
+                // تجاهل فشل تنظيف الملف الجزئي.
+            }
+
+            var failed = new DatabaseBackup
+            {
+                FileName = fileName.Length > 0
+                    ? fileName
+                    : $"quran_school_{DateTime.UtcNow:yyyy-MM-dd_HH-mm}.backup",
+                FilePath = filePath,
+                FileSize = 0,
+                CreatedDate = DateTime.UtcNow,
+                BackupType = backupType,
+                Status = "Failed",
+                CreatedBy = adminId,
+                CreatedByName = adminName
+            };
+
+            await repository.AddAsync(failed);
+            await repository.SaveChangesAsync();
+            await LogAuditAsync("Create", failed, adminId, adminName, Shorten(ex.Message, 500));
+
+            throw new BadRequestException("فشل إنشاء النسخة الاحتياطية. تحقق من اتصال قاعدة البيانات وتثبيت أدوات PostgreSQL.");
+        }
+    }
+
+    private async Task<(string FileName, string FilePath, long Size)> RunPgDumpAsync()
+    {
+        var now = DateTime.UtcNow;
+        var fileName = $"quran_school_{now:yyyy-MM-dd_HH-mm}.backup";
+        var filePath = storage.GetAbsolutePath(fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? string.Empty);
+
+        var (host, port, db, user, password, sslMode) = GetDbInfo();
+        var psi = new ProcessStartInfo("pg_dump")
+        {
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        psi.EnvironmentVariables["PGPASSWORD"] = password;
+        if (sslMode.Length > 0)
+        {
+            psi.EnvironmentVariables["PGSSLMODE"] = sslMode;
+        }
+        foreach (var arg in new[] { "-h", host, "-p", port, "-U", user, "-d", db, "-Fc", "-f", filePath })
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        var process = Process.Start(psi)
+            ?? throw new BadRequestException("تعذر تشغيل pg_dump. تأكد من تثبيت أدوات PostgreSQL.");
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        if (process.ExitCode != 0)
+        {
+            throw new BadRequestException($"pg_dump exited with code {process.ExitCode}: {Shorten(stderr, 500)}");
+        }
+
+        var size = new FileInfo(filePath).Length;
+        return (fileName, filePath, size);
+    }
+
+    private async Task EnforceRetentionAsync()
+    {
+        var settings = await repository.GetSettingAsync();
+        if (settings is null)
+        {
+            return;
+        }
+
+        var toDelete = await repository.GetOldestBeyondKeepAsync(settings.MaxBackupsToKeep);
+        if (toDelete.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var backup in toDelete)
+        {
+            await storage.DeleteAsync(backup.FileName);
+            await repository.DeleteAsync(backup);
+        }
+        await repository.SaveChangesAsync();
+        logger.LogInformation("Retention cleanup removed {Count} backup(s)", toDelete.Count);
+    }
+
+    private async Task<DatabaseBackup> GetExistingAsync(int id)
+        => await repository.GetByIdAsync(id)
+           ?? throw new NotFoundException($"لا توجد نسخة احتياطية بالمعرّف {id}.");
+
+    private async Task LogAuditAsync(string action, DatabaseBackup? backup, int? adminId, string adminName, string? details)
+    {
+        await repository.AddAuditAsync(new BackupAuditLog
+        {
+            BackupId = backup?.Id,
+            BackupFileName = backup?.FileName ?? string.Empty,
+            Action = action,
+            PerformedById = adminId,
+            PerformedByName = string.IsNullOrWhiteSpace(adminName) ? "تلقائي" : adminName,
+            PerformedAt = DateTime.UtcNow,
+            Details = details
+        });
+        await repository.SaveChangesAsync();
+    }
+
+    private (string Host, string Port, string Database, string Username, string Password, string SslMode) GetDbInfo()
+    {
+        var cs = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var part in cs.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var idx = part.IndexOf('=');
+            if (idx <= 0)
+            {
+                continue;
+            }
+            map[part[..idx].Trim()] = part[(idx + 1)..].Trim();
+        }
+
+        var sslMode = map.TryGetValue("SSL Mode", out var ssl) && ssl.Length > 0
+            ? ToLibpqSslMode(ssl)
+            : string.Empty;
+
+        return (
+            map.TryGetValue("Host", out var host) && host.Length > 0 ? host : "localhost",
+            map.TryGetValue("Port", out var port) && port.Length > 0 ? port : "5432",
+            map.TryGetValue("Database", out var db) && db.Length > 0 ? db : "quran_school",
+            map.TryGetValue("Username", out var user) && user.Length > 0 ? user : "postgres",
+            map.TryGetValue("Password", out var password) ? password : string.Empty,
+            sslMode);
+    }
+
+    private static string ToLibpqSslMode(string npgsqlMode) => npgsqlMode.ToLowerInvariant() switch
+    {
+        "verifyca" => "verify-ca",
+        "verifyfull" => "verify-full",
+        _ => npgsqlMode.ToLowerInvariant()
+    };
+
+    private static void ValidateSettings(BackupSettingsDto dto)
+    {
+        if (dto.Frequency is not ("Daily" or "Weekly" or "Monthly"))
+        {
+            throw new BadRequestException("التكرار يجب أن يكون Daily أو Weekly أو Monthly.");
+        }
+        if (!TimeOnly.TryParse(dto.BackupTime, out _))
+        {
+            throw new BadRequestException("وقت النسخ الاحتياطي غير صالح (الصيغة المتوقعة HH:mm).");
+        }
+        if (dto.MaxBackupsToKeep is < 1 or > 100)
+        {
+            throw new BadRequestException("الحد الأقصى لعدد النسخ يجب أن يكون بين 1 و100.");
+        }
+    }
+
+    private static DateTime ComputeNextRun(DateTime from, string frequency, string backupTime, DateTime? lastRun)
+    {
+        var time = TimeOnly.TryParse(backupTime, out var parsed) ? parsed : new TimeOnly(3, 0);
+        var reference = frequency == "Daily" ? from : (lastRun ?? from);
+
+        var next = reference.Date.Add(time.ToTimeSpan());
+        if (next <= from)
+        {
+            next = next.AddDays(1);
+        }
+
+        var minIntervalDays = frequency switch
+        {
+            "Weekly" => 7,
+            "Monthly" => 28,
+            _ => 0
+        };
+
+        while ((next - reference).TotalDays < minIntervalDays)
+        {
+            next = next.AddDays(1);
+        }
+
+        return next;
+    }
+
+    private static DatabaseBackupDto MapToDto(DatabaseBackup b) => new()
+    {
+        Id = b.Id,
+        FileName = b.FileName,
+        FileSize = b.FileSize,
+        CreatedDate = b.CreatedDate,
+        BackupType = b.BackupType,
+        Status = b.Status,
+        CreatedByName = b.CreatedByName,
+        RestoreDate = b.RestoreDate,
+        RestoreStatus = b.RestoreStatus
+    };
+
+    private static BackupSettingsDto MapSettings(DatabaseBackupSetting? s) => new()
+    {
+        IsEnabled = s?.IsEnabled ?? true,
+        Frequency = s?.Frequency ?? "Daily",
+        BackupTime = s?.BackupTime ?? "03:00",
+        MaxBackupsToKeep = s?.MaxBackupsToKeep ?? 10,
+        LastRunAt = s?.LastRunAt,
+        NextRunAt = s?.NextRunAt
+    };
+
+    private static string Shorten(string? value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+        return value.Length <= max ? value.Trim() : value[..max].Trim() + "…";
+    }
+}

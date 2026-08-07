@@ -121,6 +121,7 @@ builder.Services.AddScoped<IStudyScheduleRepository, StudyScheduleRepository>();
 builder.Services.AddScoped<IStudentDocumentRepository, StudentDocumentRepository>();
 builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
 builder.Services.AddScoped<INotificationReceiverRepository, NotificationReceiverRepository>();
+builder.Services.AddScoped<IDatabaseBackupRepository, DatabaseBackupRepository>();
 
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddScoped<ITeacherService, TeacherService>();
@@ -144,6 +145,9 @@ builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<INotificationReceiverService, NotificationReceiverService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddScoped<IBackupService, BackupService>();
+builder.Services.AddSingleton<IBackupStorage, LocalBackupStorage>();
+builder.Services.AddHostedService<BackupSchedulerHostedService>();
 
 var app = builder.Build();
 
