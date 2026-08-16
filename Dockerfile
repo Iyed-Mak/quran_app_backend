@@ -14,8 +14,15 @@ ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
 # أدوات PostgreSQL مطلوبة للنسخ الاحتياطي والاستعادة (pg_dump / pg_restore).
+# نثبّت عميل الإصدار 18 من مستودع PGDG لأن إصدار الخادم على Render هو 18،
+# ويجب ألا يقل إصدار العميل عن إصدار الخادم وإلا يفشل pg_dump برسالة
+# "server version mismatch".
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-18 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .

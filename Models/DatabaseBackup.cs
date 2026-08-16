@@ -16,6 +16,9 @@ public class DatabaseBackup : IEntity
     /// <summary>المسار الكامل للملف على وحدة التخزين.</summary>
     public string FilePath { get; set; } = string.Empty;
 
+    /// <summary>المجلد الذي حُفظ فيه الملف على وحدة التخزين.</summary>
+    public string Directory { get; set; } = string.Empty;
+
     /// <summary>حجم ملف النسخة بالبايت.</summary>
     public long FileSize { get; set; }
 

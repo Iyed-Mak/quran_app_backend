@@ -4,6 +4,9 @@ public class DatabaseBackupDto
 {
     public int Id { get; set; }
     public string FileName { get; set; } = string.Empty;
+
+    /// <summary>المجلد الذي حُفظ فيه الملف على وحدة التخزين.</summary>
+    public string Directory { get; set; } = string.Empty;
     public long FileSize { get; set; }
     public DateTime CreatedDate { get; set; }
     public string BackupType { get; set; } = string.Empty;

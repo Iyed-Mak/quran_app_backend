@@ -12,7 +12,7 @@ public interface IDatabaseBackupRepository
     Task AddAsync(DatabaseBackup backup);
     Task DeleteAsync(DatabaseBackup backup);
     Task<DatabaseBackup?> GetLatestAsync();
-    Task<List<DatabaseBackup>> GetOldestBeyondKeepAsync(int keep);
+    Task<List<DatabaseBackup>> GetOldestBeyondKeepAsync(int keep, string directory);
     Task SaveChangesAsync();
 
     Task<DatabaseBackupSetting?> GetSettingAsync();

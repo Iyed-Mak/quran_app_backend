@@ -27,11 +27,17 @@ public class DatabaseBackupsController(IBackupService service) : ControllerBase
     public async Task<IActionResult> GetSummary()
         => Ok(await service.GetSummaryAsync());
 
-    /// <summary>إنشاء نسخة احتياطية يدوية الآن.</summary>
+    /// <summary>تصفح مجلدات الخادم لاختيار مسار حفظ النسخ الاحتياطية.</summary>
+    [HttpGet("directories")]
+
+    public IActionResult GetDirectories([FromQuery] string? path = null)
+        => Ok(service.GetDirectoryStructure(path));
+
+    /// <summary>إنشاء نسخة احتياطية يدوية الآن (مع مجلد حفظ اختياري).</summary>
     [HttpPost]
 
-    public async Task<IActionResult> Create()
-        => Ok(await service.CreateBackupAsync(GetUserId(), GetUsername()));
+    public async Task<IActionResult> Create([FromBody] CreateBackupRequest? request = null)
+        => Ok(await service.CreateBackupAsync(GetUserId(), GetUsername(), request?.Directory));
 
     /// <summary>تنزيل ملف النسخة الاحتياطية.</summary>
     [HttpGet("{id:int}/download")]

@@ -33,8 +33,9 @@ public class DatabaseBackupRepository(AppDbContext context) : IDatabaseBackupRep
             .AsNoTracking()
             .FirstOrDefaultAsync();
 
-    public async Task<List<DatabaseBackup>> GetOldestBeyondKeepAsync(int keep)
+    public async Task<List<DatabaseBackup>> GetOldestBeyondKeepAsync(int keep, string directory)
         => await context.DatabaseBackups
+            .Where(b => b.Directory == directory)
             .OrderByDescending(b => b.CreatedDate)
             .Skip(Math.Max(0, keep))
             .AsNoTracking()

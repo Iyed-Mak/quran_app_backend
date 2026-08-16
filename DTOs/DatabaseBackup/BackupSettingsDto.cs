@@ -13,6 +13,9 @@ public class BackupSettingsDto
     /// <summary>الحد الأقصى لعدد النسخ المحتفظ بها.</summary>
     public int MaxBackupsToKeep { get; set; } = 10;
 
+    /// <summary>المجلد الذي تُحفظ فيه النسخ الاحتياطية التلقائية (فارغ = الافتراضي).</summary>
+    public string? BackupDirectory { get; set; }
+
     public DateTime? LastRunAt { get; set; }
     public DateTime? NextRunAt { get; set; }
 }

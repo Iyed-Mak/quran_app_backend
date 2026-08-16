@@ -39,16 +39,16 @@ public class BackupService(
             AutomaticBackupEnabled = settings?.IsEnabled ?? false,
             TotalBackups = backups.Count,
             TotalSize = backups.Sum(b => b.FileSize),
-            BackupDirectory = storage.DirectoryPath
+            BackupDirectory = await ResolveTargetDirectoryAsync(null)
         };
     }
 
-    public async Task<DatabaseBackupDto> CreateBackupAsync(int adminId, string adminName)
+    public async Task<DatabaseBackupDto> CreateBackupAsync(int adminId, string adminName, string? directory = null)
     {
         await OperationLock.WaitAsync();
         try
         {
-            await RunBackupAsync("Manual", adminId, adminName);
+            await RunBackupAsync("Manual", adminId, adminName, directory);
             var latest = await repository.GetLatestAsync();
             return MapToDto(latest ?? throw new BadRequestException("تعذر تسجيل النسخة الاحتياطية."));
         }
@@ -78,7 +78,7 @@ public class BackupService(
         byte[] data;
         try
         {
-            data = await storage.ReadAsync(backup.FileName);
+            data = await storage.ReadAsync(backup.FileName, backup.Directory);
         }
         catch (FileNotFoundException)
         {
@@ -97,7 +97,7 @@ public class BackupService(
             throw new BadRequestException("لا يمكن استعادة نسخة احتياطية فاشلة.");
         }
 
-        var filePath = storage.GetAbsolutePath(backup.FileName);
+        var filePath = storage.GetAbsolutePath(backup.FileName, backup.Directory);
         if (!File.Exists(filePath))
         {
             throw new NotFoundException("ملف النسخة الاحتياطية غير موجود على الخادم.");
@@ -155,14 +155,21 @@ public class BackupService(
     public async Task DeleteAsync(int backupId, int adminId, string adminName)
     {
         var backup = await GetExistingAsync(backupId);
-        await storage.DeleteAsync(backup.FileName);
+        await storage.DeleteAsync(backup.FileName, backup.Directory);
         await repository.DeleteAsync(backup);
         await repository.SaveChangesAsync();
         await LogAuditAsync("Delete", backup, adminId, adminName, null);
     }
 
     public async Task<BackupSettingsDto> GetSettingsAsync()
-        => MapSettings(await repository.GetSettingAsync());
+    {
+        var dto = MapSettings(await repository.GetSettingAsync());
+        if (string.IsNullOrWhiteSpace(dto.BackupDirectory))
+        {
+            dto.BackupDirectory = await ResolveTargetDirectoryAsync(null);
+        }
+        return dto;
+    }
 
     public async Task<BackupSettingsDto> UpdateSettingsAsync(BackupSettingsDto dto, int adminId, string adminName)
     {
@@ -179,6 +186,7 @@ public class BackupService(
         setting.Frequency = dto.Frequency;
         setting.BackupTime = dto.BackupTime;
         setting.MaxBackupsToKeep = dto.MaxBackupsToKeep;
+        setting.BackupDirectory = string.IsNullOrWhiteSpace(dto.BackupDirectory) ? null : dto.BackupDirectory.Trim();
         setting.UpdatedAt = DateTime.UtcNow;
         setting.UpdatedBy = adminId;
         setting.NextRunAt = ComputeNextRun(DateTime.UtcNow, dto.Frequency, dto.BackupTime, setting.LastRunAt);
@@ -186,7 +194,8 @@ public class BackupService(
         await repository.SaveSettingAsync(setting);
         await repository.SaveChangesAsync();
         await LogAuditAsync("UpdateSettings", null, adminId, adminName,
-            $"is_enabled={dto.IsEnabled}; frequency={dto.Frequency}; time={dto.BackupTime}; keep={dto.MaxBackupsToKeep}");
+            $"is_enabled={dto.IsEnabled}; frequency={dto.Frequency}; time={dto.BackupTime}; " +
+            $"keep={dto.MaxBackupsToKeep}; directory={setting.BackupDirectory ?? "(default)"}");
 
         return MapSettings(await repository.GetSettingAsync());
     }
@@ -204,6 +213,58 @@ public class BackupService(
                 Details = l.Details
             })
             .ToList();
+
+    public DirectoryBrowserDto GetDirectoryStructure(string? path)
+    {
+        string current;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            current = !string.IsNullOrWhiteSpace(desktop) && Directory.Exists(desktop)
+                ? desktop
+                : Directory.GetDirectoryRoot(Environment.CurrentDirectory);
+        }
+        else
+        {
+            try
+            {
+                current = Path.GetFullPath(path);
+                if (!Directory.Exists(current))
+                {
+                    current = Directory.GetDirectoryRoot(current);
+                }
+            }
+            catch
+            {
+                current = Directory.GetDirectoryRoot(Environment.CurrentDirectory);
+            }
+        }
+
+        var entries = new List<DirectoryEntryDto>();
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(current))
+            {
+                var info = new DirectoryInfo(dir);
+                entries.Add(new DirectoryEntryDto { Name = info.Name, Path = info.FullName });
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            // المجلدات غير القابلة للقراءة تُتجاهل ببساطة.
+        }
+
+        var parent = Directory.GetParent(current)?.FullName;
+        return new DirectoryBrowserDto
+        {
+            CurrentPath = current,
+            ParentPath = parent,
+            IsRoot = parent is null,
+            Entries = entries
+                .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        };
+    }
 
     public async Task RunScheduledBackupIfDueAsync()
     {
@@ -223,7 +284,7 @@ public class BackupService(
             await OperationLock.WaitAsync();
             try
             {
-                await RunBackupAsync("Automatic", null, "تلقائي");
+                await RunBackupAsync("Automatic", null, "تلقائي", null);
                 setting.LastRunAt = DateTime.UtcNow;
                 setting.NextRunAt = ComputeNextRun(DateTime.UtcNow, setting.Frequency, setting.BackupTime, setting.LastRunAt);
             }
@@ -251,19 +312,21 @@ public class BackupService(
 
     // ───────────────────────────── private ─────────────────────────────
 
-    private async Task RunBackupAsync(string backupType, int? adminId, string adminName)
+    private async Task RunBackupAsync(string backupType, int? adminId, string adminName, string? directory)
     {
         string fileName = string.Empty;
         string filePath = string.Empty;
+        string targetDirectory = string.Empty;
 
         try
         {
-            (fileName, filePath, var size) = await RunPgDumpAsync();
+            (fileName, filePath, targetDirectory, var size) = await RunPgDumpAsync(directory);
 
             var backup = new DatabaseBackup
             {
                 FileName = fileName,
                 FilePath = filePath,
+                Directory = targetDirectory,
                 FileSize = size,
                 CreatedDate = DateTime.UtcNow,
                 BackupType = backupType,
@@ -275,7 +338,13 @@ public class BackupService(
             await repository.AddAsync(backup);
             await repository.SaveChangesAsync();
             await LogAuditAsync("Create", backup, adminId, adminName, null);
-            await EnforceRetentionAsync();
+
+            // تطبيق سياسة الاحتفاظ على النسخ التلقائية فقط: عند بلوغ الحد
+            // الأقصى (مثل 10 نسخ) تُحذف النسخة الأقدم تلقائيًا.
+            if (backupType == "Automatic")
+            {
+                await EnforceRetentionAsync(targetDirectory);
+            }
         }
         catch (Exception ex)
         {
@@ -299,6 +368,7 @@ public class BackupService(
                     ? fileName
                     : $"quran_school_{DateTime.UtcNow:yyyy-MM-dd_HH-mm}.backup",
                 FilePath = filePath,
+                Directory = targetDirectory,
                 FileSize = 0,
                 CreatedDate = DateTime.UtcNow,
                 BackupType = backupType,
@@ -311,16 +381,19 @@ public class BackupService(
             await repository.SaveChangesAsync();
             await LogAuditAsync("Create", failed, adminId, adminName, Shorten(ex.Message, 500));
 
-            throw new BadRequestException("فشل إنشاء النسخة الاحتياطية. تحقق من اتصال قاعدة البيانات وتثبيت أدوات PostgreSQL.");
+            var reason = ex is BadRequestException && !string.IsNullOrWhiteSpace(ex.Message)
+                ? Shorten(ex.Message, 300)
+                : "تحقق من اتصال قاعدة البيانات وتثبيت أدوات PostgreSQL في بيئة الاستضافة.";
+            throw new BadRequestException($"فشل إنشاء النسخة الاحتياطية. {reason}");
         }
     }
 
-    private async Task<(string FileName, string FilePath, long Size)> RunPgDumpAsync()
+    private async Task<(string FileName, string FilePath, string Directory, long Size)> RunPgDumpAsync(string? directory)
     {
         var now = DateTime.UtcNow;
         var fileName = $"quran_school_{now:yyyy-MM-dd_HH-mm}.backup";
-        var filePath = storage.GetAbsolutePath(fileName);
-        Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? string.Empty);
+        var targetDirectory = await ResolveTargetDirectoryAsync(directory);
+        var filePath = storage.GetAbsolutePath(fileName, targetDirectory);
 
         var (host, port, db, user, password, sslMode) = GetDbInfo();
         var psi = new ProcessStartInfo("pg_dump")
@@ -339,8 +412,7 @@ public class BackupService(
             psi.ArgumentList.Add(arg);
         }
 
-        var process = Process.Start(psi)
-            ?? throw new BadRequestException("تعذر تشغيل pg_dump. تأكد من تثبيت أدوات PostgreSQL.");
+        var process = StartPgDump(psi);
         var stderr = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
 
@@ -350,10 +422,25 @@ public class BackupService(
         }
 
         var size = new FileInfo(filePath).Length;
-        return (fileName, filePath, size);
+        return (fileName, filePath, targetDirectory, size);
     }
 
-    private async Task EnforceRetentionAsync()
+    private static Process StartPgDump(ProcessStartInfo psi)
+    {
+        try
+        {
+            return Process.Start(psi)
+                ?? throw new BadRequestException("تعذر تشغيل pg_dump. تأكد من تثبيت أدوات PostgreSQL.");
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            throw new BadRequestException(
+                "تعذر العثور على أداة pg_dump في بيئة الاستضافة. " +
+                "تأكد من تثبيت أدوات PostgreSQL (postgresql-client) في الصورة.");
+        }
+    }
+
+    private async Task EnforceRetentionAsync(string directory)
     {
         var settings = await repository.GetSettingAsync();
         if (settings is null)
@@ -361,7 +448,7 @@ public class BackupService(
             return;
         }
 
-        var toDelete = await repository.GetOldestBeyondKeepAsync(settings.MaxBackupsToKeep);
+        var toDelete = await repository.GetOldestBeyondKeepAsync(settings.MaxBackupsToKeep, directory);
         if (toDelete.Count == 0)
         {
             return;
@@ -369,11 +456,40 @@ public class BackupService(
 
         foreach (var backup in toDelete)
         {
-            await storage.DeleteAsync(backup.FileName);
+            await storage.DeleteAsync(backup.FileName, backup.Directory);
             await repository.DeleteAsync(backup);
         }
         await repository.SaveChangesAsync();
-        logger.LogInformation("Retention cleanup removed {Count} backup(s)", toDelete.Count);
+        logger.LogInformation("Retention cleanup removed {Count} backup(s) from {Directory}", toDelete.Count, directory);
+    }
+
+    /// <summary>
+    /// تحديد مجلد الحفظ الفعلي: المسار المطلوب (للنسخ اليدوية) ثم مجلد
+    /// إعدادات النسخ التلقائي ثم إعداد التهيئة ثم سكّرينة المكتب (الافتراضي).
+    /// </summary>
+    private async Task<string> ResolveTargetDirectoryAsync(string? preferred)
+    {
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            return storage.ResolveDirectory(preferred);
+        }
+
+        var settings = await repository.GetSettingAsync();
+        if (!string.IsNullOrWhiteSpace(settings?.BackupDirectory))
+        {
+            return storage.ResolveDirectory(settings.BackupDirectory);
+        }
+
+        var fromConfig = configuration["Backup:StorageDirectory"];
+        return storage.ResolveDirectory(string.IsNullOrWhiteSpace(fromConfig) ? DefaultDirectory() : fromConfig);
+    }
+
+    private static string DefaultDirectory()
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        return !string.IsNullOrWhiteSpace(desktop)
+            ? Path.Combine(desktop, "QuranSchool_Backups")
+            : Path.Combine(Environment.CurrentDirectory, "Backups");
     }
 
     private async Task<DatabaseBackup> GetExistingAsync(int id)
@@ -398,6 +514,15 @@ public class BackupService(
     private (string Host, string Port, string Database, string Username, string Password, string SslMode) GetDbInfo()
     {
         var cs = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
+
+        // يدعم صيغة URI مثل postgres://user:pass@host:5432/db?sslmode=require
+        // التي تعتمدها عادةً متغيرات بيئة Render، بالإضافة إلى صيغة key=value.
+        if (cs.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+            cs.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+        {
+            return ParsePostgresUri(cs);
+        }
+
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var part in cs.Split(';', StringSplitOptions.RemoveEmptyEntries))
@@ -421,6 +546,53 @@ public class BackupService(
             map.TryGetValue("Username", out var user) && user.Length > 0 ? user : "postgres",
             map.TryGetValue("Password", out var password) ? password : string.Empty,
             sslMode);
+    }
+
+    private static (string Host, string Port, string Database, string Username, string Password, string SslMode) ParsePostgresUri(string cs)
+    {
+        try
+        {
+            var uri = new Uri(cs);
+            var host = uri.Host.Length > 0 ? uri.Host : "localhost";
+            var port = uri.IsDefaultPort ? "5432" : uri.Port.ToString();
+            var database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'));
+            var user = "postgres";
+            var password = string.Empty;
+            if (!string.IsNullOrEmpty(uri.UserInfo))
+            {
+                var parts = uri.UserInfo.Split(':', 2);
+                user = Uri.UnescapeDataString(parts[0]);
+                if (parts.Length > 1)
+                {
+                    password = Uri.UnescapeDataString(parts[1]);
+                }
+            }
+
+            var sslMode = string.Empty;
+            var query = uri.Query;
+            if (query.IndexOf("sslmode=require", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                sslMode = "require";
+            }
+            else if (query.IndexOf("sslmode=verify-full", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                sslMode = "verify-full";
+            }
+            else if (query.IndexOf("sslmode=verify-ca", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                sslMode = "verify-ca";
+            }
+            else if (query.IndexOf("sslmode=disable", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                sslMode = "disable";
+            }
+
+            return (host, port, database, user, password, sslMode);
+        }
+        catch
+        {
+            return ("localhost", "5432", "quran_school", "postgres", string.Empty, string.Empty);
+        }
     }
 
     private static string ToLibpqSslMode(string npgsqlMode) => npgsqlMode.ToLowerInvariant() switch
@@ -476,6 +648,7 @@ public class BackupService(
     {
         Id = b.Id,
         FileName = b.FileName,
+        Directory = b.Directory,
         FileSize = b.FileSize,
         CreatedDate = b.CreatedDate,
         BackupType = b.BackupType,
@@ -491,6 +664,7 @@ public class BackupService(
         Frequency = s?.Frequency ?? "Daily",
         BackupTime = s?.BackupTime ?? "03:00",
         MaxBackupsToKeep = s?.MaxBackupsToKeep ?? 10,
+        BackupDirectory = s?.BackupDirectory,
         LastRunAt = s?.LastRunAt,
         NextRunAt = s?.NextRunAt
     };

@@ -22,6 +22,9 @@ public class DatabaseBackupSetting : IEntity
     /// <summary>الحد الأقصى لعدد النسخ الاحتياطية المحتفظ بها.</summary>
     public int MaxBackupsToKeep { get; set; } = 10;
 
+    /// <summary>المجلد الذي تُحفظ فيه النسخ الاحتياطية التلقائية (نص فارغ = الافتراضي).</summary>
+    public string? BackupDirectory { get; set; }
+
     /// <summary>آخر مرة نُفّذ فيها نسخ تلقائي (UTC).</summary>
     public DateTime? LastRunAt { get; set; }
 
