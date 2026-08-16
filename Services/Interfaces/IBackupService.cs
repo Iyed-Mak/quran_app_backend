@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using QuranSchool.Api.DTOs.DatabaseBackup;
 
 namespace QuranSchool.Api.Services.Interfaces;
@@ -13,6 +14,7 @@ public interface IBackupService
     Task<DatabaseBackupDto> CreateBackupAsync(int adminId, string adminName, string? directory = null);
     Task<(byte[] Data, string FileName)> DownloadAsync(int backupId, int adminId, string adminName);
     Task RestoreAsync(int backupId, int adminId, string adminName);
+    Task<DatabaseBackupDto> RestoreFromFileAsync(IFormFile file, int adminId, string adminName);
     Task DeleteAsync(int backupId, int adminId, string adminName);
     Task<BackupSettingsDto> GetSettingsAsync();
     Task<BackupSettingsDto> UpdateSettingsAsync(BackupSettingsDto settings, int adminId, string adminName);

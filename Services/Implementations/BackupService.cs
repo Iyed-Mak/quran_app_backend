@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.AspNetCore.Http;
 using QuranSchool.Api.DTOs.DatabaseBackup;
 using QuranSchool.Api.Exceptions;
 using QuranSchool.Api.Models;
@@ -106,45 +107,100 @@ public class BackupService(
         await OperationLock.WaitAsync();
         try
         {
-            var (host, port, db, user, password, sslMode) = GetDbInfo();
-            var psi = new ProcessStartInfo("pg_restore")
+            await ValidateDumpFileAsync(filePath);
+            await CreateSafetySnapshotAsync();
+
+            try
             {
-                UseShellExecute = false,
-                RedirectStandardError = true,
-                CreateNoWindow = true
+                await RunPgRestoreAsync(filePath);
+                backup.RestoreDate = DateTime.UtcNow;
+                backup.RestoredBy = adminId;
+                backup.RestoreStatus = "Success";
+                await repository.SaveChangesAsync();
+                await LogAuditAsync("Restore", backup, adminId, adminName, null);
+            }
+            catch (Exception ex)
+            {
+                backup.RestoreDate = DateTime.UtcNow;
+                backup.RestoredBy = adminId;
+                backup.RestoreStatus = "Failed";
+                await repository.SaveChangesAsync();
+                await LogAuditAsync("Restore", backup, adminId, adminName, Shorten(ex.Message, 500));
+                logger.LogError(ex, "Restore failed for backup {Id}", backupId);
+                throw new BadRequestException("فشلت عملية الاستعادة: " + Shorten(ex.Message, 500));
+            }
+        }
+        finally
+        {
+            OperationLock.Release();
+        }
+    }
+
+    public async Task<DatabaseBackupDto> RestoreFromFileAsync(IFormFile file, int adminId, string adminName)
+    {
+        if (file is null || file.Length == 0)
+        {
+            throw new BadRequestException("يرجى اختيار ملف نسخة احتياطية صالح.");
+        }
+
+        string filePath = string.Empty;
+        await OperationLock.WaitAsync();
+        try
+        {
+            var targetDirectory = await ResolveTargetDirectoryAsync(null);
+            var fileName = $"upload_restore_{DateTime.UtcNow:yyyy-MM-dd_HH-mm-ss}.backup";
+            filePath = storage.GetAbsolutePath(fileName, targetDirectory);
+
+            await using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+            {
+                await file.CopyToAsync(stream);
+            }
+
+            await ValidateDumpFileAsync(filePath);
+            await CreateSafetySnapshotAsync();
+            await RunPgRestoreAsync(filePath);
+
+            var size = new FileInfo(filePath).Length;
+            var backup = new DatabaseBackup
+            {
+                FileName = fileName,
+                FilePath = filePath,
+                Directory = targetDirectory,
+                FileSize = size,
+                CreatedDate = DateTime.UtcNow,
+                BackupType = "Manual",
+                Status = "Success",
+                CreatedBy = adminId,
+                CreatedByName = adminName,
+                RestoreDate = DateTime.UtcNow,
+                RestoredBy = adminId,
+                RestoreStatus = "Success"
             };
-            psi.EnvironmentVariables["PGPASSWORD"] = password;
-            if (sslMode.Length > 0)
-            {
-                psi.EnvironmentVariables["PGSSLMODE"] = sslMode;
-            }
-            foreach (var arg in new[]
-            {
-                "-h", host, "-p", port, "-U", user, "-d", db,
-                "--clean", "--if-exists", "--no-owner", "--no-privileges",
-                "--exit-on-error", "-Fc", filePath
-            })
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            var process = Process.Start(psi)
-                ?? throw new BadRequestException("تعذر تشغيل pg_restore. تأكد من تثبيت أدوات PostgreSQL.");
-            var stderr = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-
-            var succeeded = process.ExitCode == 0;
-            backup.RestoreDate = DateTime.UtcNow;
-            backup.RestoredBy = adminId;
-            backup.RestoreStatus = succeeded ? "Success" : "Failed";
+            await repository.AddAsync(backup);
             await repository.SaveChangesAsync();
-            await LogAuditAsync("Restore", backup, adminId, adminName, succeeded ? null : stderr.Trim());
-
-            if (!succeeded)
+            await LogAuditAsync("RestoreFromFile", backup, adminId, adminName, null);
+            return MapToDto(backup);
+        }
+        catch (Exception ex)
+        {
+            if (filePath.Length > 0 && File.Exists(filePath))
             {
-                logger.LogError("pg_restore failed: {Stderr}", stderr);
-                throw new BadRequestException("فشلت عملية الاستعادة: " + Shorten(stderr, 500));
+                try
+                {
+                    File.Delete(filePath);
+                }
+                catch
+                {
+                    // تجاهل فشل تنظيف الملف المرفوع.
+                }
             }
+
+            if (ex is BadRequestException or NotFoundException)
+            {
+                throw;
+            }
+            logger.LogError(ex, "Restore from uploaded file failed");
+            throw new BadRequestException("فشلت عملية الاستعادة من الملف: " + Shorten(ex.Message, 500));
         }
         finally
         {
@@ -395,6 +451,14 @@ public class BackupService(
         var targetDirectory = await ResolveTargetDirectoryAsync(directory);
         var filePath = storage.GetAbsolutePath(fileName, targetDirectory);
 
+        await RunPgDumpProcessAsync(filePath);
+
+        var size = new FileInfo(filePath).Length;
+        return (fileName, filePath, targetDirectory, size);
+    }
+
+    private async Task RunPgDumpProcessAsync(string filePath)
+    {
         var (host, port, db, user, password, sslMode) = GetDbInfo();
         var psi = new ProcessStartInfo("pg_dump")
         {
@@ -412,7 +476,7 @@ public class BackupService(
             psi.ArgumentList.Add(arg);
         }
 
-        var process = StartPgDump(psi);
+        var process = StartPgTool(psi, "pg_dump");
         var stderr = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
 
@@ -420,23 +484,113 @@ public class BackupService(
         {
             throw new BadRequestException($"pg_dump exited with code {process.ExitCode}: {Shorten(stderr, 500)}");
         }
-
-        var size = new FileInfo(filePath).Length;
-        return (fileName, filePath, targetDirectory, size);
     }
 
-    private static Process StartPgDump(ProcessStartInfo psi)
+    private static Process StartPgTool(ProcessStartInfo psi, string toolName)
     {
         try
         {
             return Process.Start(psi)
-                ?? throw new BadRequestException("تعذر تشغيل pg_dump. تأكد من تثبيت أدوات PostgreSQL.");
+                ?? throw new BadRequestException($"تعذر تشغيل {toolName}. تأكد من تثبيت أدوات PostgreSQL.");
         }
         catch (System.ComponentModel.Win32Exception)
         {
             throw new BadRequestException(
-                "تعذر العثور على أداة pg_dump في بيئة الاستضافة. " +
+                $"تعذر العثور على أداة {toolName} في بيئة الاستضافة. " +
                 "تأكد من تثبيت أدوات PostgreSQL (postgresql-client) في الصورة.");
+        }
+    }
+
+    /// <summary>
+    /// التحقق من أن الملف نسخة احتياطية صالحة (pg_restore --list) قبل
+    /// البدء بأي عملية استعادة — يمنع محاولة استعادة ملفات تالفة أو غير
+    /// مدعومة تترك قاعدة البيانات في حالة جزئية.
+    /// </summary>
+    private static async Task ValidateDumpFileAsync(string filePath)
+    {
+        var psi = new ProcessStartInfo("pg_restore")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("--list");
+        psi.ArgumentList.Add(filePath);
+
+        try
+        {
+            var process = StartPgTool(psi, "pg_restore");
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var stderr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0 || !output.Contains("TABLE DATA", StringComparison.Ordinal))
+            {
+                throw new BadRequestException("ملف النسخة الاحتياطية غير صالح أو غير مدعوم.");
+            }
+        }
+        catch (BadRequestException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            throw new BadRequestException("ملف النسخة الاحتياطية غير صالح أو غير مدعوم.");
+        }
+    }
+
+    /// <summary>
+    /// إنشاء نسخة أمان تلقائية من قاعدة البيانات الحالية قبل تنفيذ أي
+    /// استعادة، تُحفظ في مجلد النسخ الاحتياطية كشبكة أمان إضافية (لا
+    /// تُسجَّل كسجل نسخة لأنها قد تُستبدل أثناء الاستعادة نفسها).
+    /// </summary>
+    private async Task<string> CreateSafetySnapshotAsync()
+    {
+        var targetDirectory = await ResolveTargetDirectoryAsync(null);
+        var fileName = $"pre_restore_{DateTime.UtcNow:yyyy-MM-dd_HH-mm-ss}.backup";
+        var filePath = storage.GetAbsolutePath(fileName, targetDirectory);
+
+        await RunPgDumpProcessAsync(filePath);
+        logger.LogInformation("Pre-restore safety snapshot created at {Path}", filePath);
+        return filePath;
+    }
+
+    /// <summary>تنفيذ pg_restore بأمان: يُلف جميع العمليات في معاملة واحدة،
+    /// فإذا فشلت أي خطوة تُتراجع كل التغييرات ويبقى الوضع الراهن كما هو.</summary>
+    private async Task RunPgRestoreAsync(string filePath)
+    {
+        var (host, port, db, user, password, sslMode) = GetDbInfo();
+        var psi = new ProcessStartInfo("pg_restore")
+        {
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        psi.EnvironmentVariables["PGPASSWORD"] = password;
+        if (sslMode.Length > 0)
+        {
+            psi.EnvironmentVariables["PGSSLMODE"] = sslMode;
+        }
+        foreach (var arg in new[]
+        {
+            "-h", host, "-p", port, "-U", user, "-d", db,
+            "--clean", "--if-exists", "--no-owner", "--no-privileges",
+            "--exit-on-error", "--single-transaction",
+            "--no-comments", "--no-acl",
+            "-Fc", filePath
+        })
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        var process = StartPgTool(psi, "pg_restore");
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        if (process.ExitCode != 0)
+        {
+            throw new BadRequestException("pg_restore exited with code " + process.ExitCode + ": " + Shorten(stderr, 500));
         }
     }
 

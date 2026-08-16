@@ -57,6 +57,17 @@ public class DatabaseBackupsController(IBackupService service) : ControllerBase
         return NoContent();
     }
 
+    /// <summary>استعادة قاعدة البيانات من ملف نسخة احتياطية مُرفَع من الجهاز.</summary>
+    [HttpPost("restore-from-file")]
+    [Consumes("multipart/form-data")]
+    [RequestFormLimits(MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024)]
+
+    public async Task<IActionResult> RestoreFromFile([FromForm] IFormFile file)
+    {
+        var dto = await service.RestoreFromFileAsync(file, GetUserId(), GetUsername());
+        return Ok(dto);
+    }
+
     /// <summary>حذف نسخة احتياطية وملفها.</summary>
     [HttpDelete("{id:int}")]
 
