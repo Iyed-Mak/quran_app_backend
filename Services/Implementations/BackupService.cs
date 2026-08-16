@@ -560,38 +560,96 @@ public class BackupService(
     /// فإذا فشلت أي خطوة تُتراجع كل التغييرات ويبقى الوضع الراهن كما هو.</summary>
     private async Task RunPgRestoreAsync(string filePath)
     {
-        var (host, port, db, user, password, sslMode) = GetDbInfo();
+        var tocPath = await CreateFilteredTocFileAsync(filePath);
+        try
+        {
+            var (host, port, db, user, password, sslMode) = GetDbInfo();
+            var psi = new ProcessStartInfo("pg_restore")
+            {
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            psi.EnvironmentVariables["PGPASSWORD"] = password;
+            if (sslMode.Length > 0)
+            {
+                psi.EnvironmentVariables["PGSSLMODE"] = sslMode;
+            }
+            foreach (var arg in new[]
+            {
+                "-h", host, "-p", port, "-U", user, "-d", db,
+                "--clean", "--if-exists", "--no-owner", "--no-privileges",
+                "--exit-on-error", "--single-transaction",
+                "--no-comments", "--no-acl",
+                "-Fc", "-L", tocPath, filePath
+            })
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            var process = StartPgTool(psi, "pg_restore");
+            var stderr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                throw new BadRequestException("pg_restore exited with code " + process.ExitCode + ": " + Shorten(stderr, 500));
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tocPath))
+                {
+                    File.Delete(tocPath);
+                }
+            }
+            catch
+            {
+                // تنظيف أفضل جهد — فشل الحذف لا يُفشل الاستعادة.
+            }
+        }
+    }
+
+    /// <summary>
+    /// إنشاء قائمة استعادة (TOC) من ملف النسخة الاحتياطية مع استبعاد الكائنات
+    /// التي لا يملكها مستخدم التطبيق، مثل ملحق pg_stat_statements المثبّت
+    /// مسبقًا بواسطة Render ومملوك لمستخدم النظام postgres. لا يمكن لمستخدم
+    /// التطبيق إسقاط هذا الملحق، لذا يجب استبعاده من قائمة الاستعادة وإلا
+    /// فشلت العملية كلها (ويظل الملحق موجودًا في قاعدة البيانات كما هو).
+    /// </summary>
+    private async Task<string> CreateFilteredTocFileAsync(string filePath)
+    {
         var psi = new ProcessStartInfo("pg_restore")
         {
             UseShellExecute = false,
+            RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        psi.EnvironmentVariables["PGPASSWORD"] = password;
-        if (sslMode.Length > 0)
-        {
-            psi.EnvironmentVariables["PGSSLMODE"] = sslMode;
-        }
-        foreach (var arg in new[]
-        {
-            "-h", host, "-p", port, "-U", user, "-d", db,
-            "--clean", "--if-exists", "--no-owner", "--no-privileges",
-            "--exit-on-error", "--single-transaction",
-            "--no-comments", "--no-acl",
-            "-Fc", filePath
-        })
-        {
-            psi.ArgumentList.Add(arg);
-        }
+        psi.ArgumentList.Add("--list");
+        psi.ArgumentList.Add("-Fc");
+        psi.ArgumentList.Add(filePath);
 
         var process = StartPgTool(psi, "pg_restore");
-        var stderr = await process.StandardError.ReadToEndAsync();
+        var output = await process.StandardOutput.ReadToEndAsync();
+        await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
         {
-            throw new BadRequestException("pg_restore exited with code " + process.ExitCode + ": " + Shorten(stderr, 500));
+            throw new BadRequestException("تعذّر قراءة محتويات ملف النسخة الاحتياطية.");
         }
+
+        var filtered = output
+            .Split('\n')
+            .Where(line => !line.Contains("pg_stat_statements", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var tocPath = Path.Combine(Path.GetTempPath(), $"restore_toc_{DateTime.UtcNow:yyyyMMddHHmmssfff}.list");
+        await File.WriteAllLinesAsync(tocPath, filtered);
+        return tocPath;
     }
 
     private async Task EnforceRetentionAsync(string directory)
