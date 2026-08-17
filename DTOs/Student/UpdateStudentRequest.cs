@@ -34,4 +34,7 @@ public class UpdateStudentRequest
 
     /// <summary>فارغ/null = إبقاء كلمة المرور الحالية.</summary>
     public string? Password { get; set; }
+
+    public string? Status { get; set; }
+    public string? SeparationReason { get; set; }
 }

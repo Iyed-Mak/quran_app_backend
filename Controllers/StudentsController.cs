@@ -53,6 +53,13 @@ public class StudentsController(IStudentService service) : ControllerBase
         return Ok(updated);
     }
 
+    [HttpPatch("{id:int}/status")]
+    public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStudentStatusRequest request)
+    {
+        var updated = await _service.UpdateStatusAsync(id, request);
+        return Ok(updated);
+    }
+
     [HttpPost("{id:int}/reset-password")]
     public async Task<IActionResult> ResetPassword(int id, [FromBody] ResetPasswordRequest? request)
     {

@@ -19,6 +19,8 @@ public class Student : IUserAccount
 
     [System.Text.Json.Serialization.JsonIgnore]
     public string Password { get; set; } = string.Empty;
+    public string Status { get; set; } = "active";
+    public string? SeparationReason { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

@@ -10,5 +10,6 @@ public interface IStudentService : IService<Student>
     Task<List<Student>> GetByParentAsync(int parentId);
     Task<Student> CreateAsync(CreateStudentRequest request);
     Task<Student> UpdateAsync(int id, UpdateStudentRequest request);
+    Task<Student> UpdateStatusAsync(int id, UpdateStudentStatusRequest request);
     Task<string> ResetPasswordAsync(int id, string? newPassword);
 }

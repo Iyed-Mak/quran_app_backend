@@ -60,6 +60,8 @@ public class StudentService(IStudentRepository repository) : Service<Student>(re
             StudentPhone = request.StudentPhone,
             Username = request.Username.Trim(),
             Password = BCrypt.Net.BCrypt.HashPassword(request.Password),
+            Status = string.IsNullOrWhiteSpace(request.Status) ? "active" : request.Status.Trim(),
+            SeparationReason = request.SeparationReason,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -103,6 +105,8 @@ public class StudentService(IStudentRepository repository) : Service<Student>(re
         student.StudentPhone = request.StudentPhone;
         student.Username = request.Username.Trim();
         student.Password = hashedPassword;
+        student.Status = string.IsNullOrWhiteSpace(request.Status) ? student.Status : request.Status.Trim();
+        student.SeparationReason = request.SeparationReason ?? student.SeparationReason;
         student.UpdatedAt = DateTime.UtcNow;
 
         await base.UpdateAsync(student);
@@ -130,6 +134,33 @@ public class StudentService(IStudentRepository repository) : Service<Student>(re
         student.UpdatedAt = DateTime.UtcNow;
         await base.UpdateAsync(student);
         return password;
+    }
+
+    public async Task<Student> UpdateStatusAsync(int id, UpdateStudentStatusRequest request)
+    {
+        var student = await repository.GetByIdAsync(id);
+        if (student is null)
+        {
+            throw new NotFoundException("الطالب غير موجود.");
+        }
+
+        var newStatus = request.Status?.Trim().ToLower();
+        if (newStatus != "active" && newStatus != "suspended")
+        {
+            throw new BadRequestException("قيمة الحالة غير صالحة. يجب أن تكون 'active' أو 'suspended'.");
+        }
+
+        if (newStatus == "suspended" && string.IsNullOrWhiteSpace(request.SeparationReason))
+        {
+            throw new BadRequestException("سبب الفصل مطلوب عند تعليق الحساب.");
+        }
+
+        student.Status = newStatus;
+        student.SeparationReason = newStatus == "suspended" ? request.SeparationReason?.Trim() : null;
+        student.UpdatedAt = DateTime.UtcNow;
+
+        await base.UpdateAsync(student);
+        return student;
     }
 
     private static string GeneratePassword()

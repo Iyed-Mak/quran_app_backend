@@ -163,6 +163,12 @@ public class AuthService(AppDbContext context, IJwtTokenService jwtTokenService)
         var student = await context.Students.FirstOrDefaultAsync(s => s.Username == username);
         if (student is not null)
         {
+            if (student.Status == "suspended")
+            {
+                throw new ForbiddenException(
+                    "هذا الطالب مفصول.",
+                    student.SeparationReason ?? "لم يتم تحديد السبب.");
+            }
             return (student, "student");
         }
 

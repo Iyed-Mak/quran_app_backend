@@ -33,4 +33,7 @@ public class CreateStudentRequest
 
     [MinLength(6, ErrorMessage = "كلمة المرور يجب ألا تقل عن 6 أحرف.")]
     public string Password { get; set; } = string.Empty;
+
+    public string? Status { get; set; }
+    public string? SeparationReason { get; set; }
 }

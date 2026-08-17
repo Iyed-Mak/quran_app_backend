@@ -57,6 +57,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasIndex(s => s.Username).IsUnique();
         modelBuilder.Entity<Student>()
             .HasIndex(s => s.SerialNumber).IsUnique();
+        modelBuilder.Entity<Student>()
+            .Property(s => s.Status).HasDefaultValue("active");
 
         modelBuilder.Entity<RevokedToken>()
             .HasIndex(r => r.JwtId).IsUnique();

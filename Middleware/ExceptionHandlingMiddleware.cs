@@ -16,11 +16,9 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
             context.Response.StatusCode = ex.StatusCode;
             context.Response.ContentType = "application/json";
 
-            var apiError = new
-            {
-                Status = ex.StatusCode,
-                Title = ex.Message
-            };
+            object apiError = ex is ForbiddenException { Reason: not null } forbidden
+                ? new { Status = ex.StatusCode, Title = ex.Message, Reason = forbidden.Reason }
+                : new { Status = ex.StatusCode, Title = ex.Message };
 
             await context.Response.WriteAsJsonAsync(apiError, new JsonSerializerOptions
             {
