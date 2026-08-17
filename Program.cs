@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -149,6 +151,41 @@ builder.Services.AddScoped<IBackupService, BackupService>();
 builder.Services.AddSingleton<IBackupStorage, LocalBackupStorage>();
 builder.Services.AddHostedService<BackupSchedulerHostedService>();
 
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.OnRejected = async (context, _) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsJsonAsync(new
+        {
+            error = "rate_limit_exceeded",
+            message = "تم تجاوز الحد المسموح من محاولات الدخول. يُرجى المحاولة بعد دقيقة.",
+            retry_after = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter)
+                ? (int)retryAfter.TotalSeconds
+                : 60
+        });
+    };
+
+    options.AddPolicy("login", httpContext =>
+    {
+        var forwardedFor = httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+        var ip = !string.IsNullOrEmpty(forwardedFor)
+            ? forwardedFor.Split(',')[0].Trim()
+            : httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ip,
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            });
+    });
+});
+
 var app = builder.Build();
 
 // Apply pending EF migrations automatically on startup, but never let a
@@ -197,10 +234,7 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// NOTE: no UseHttpsRedirection here on purpose. The container only binds HTTP
-// (ASPNETCORE_URLS=http://+:8080) and TLS is terminated by the Render load
-// balancer, so a redirect to an https port that doesn't exist would be a no-op
-// and could break proxied requests.
+app.UseRateLimiter();
 
 app.UseCors("AllowFrontend");
 
