@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("QuranSchool.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+147be5cb09753871494b0a27652325ba1a44ee2f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b9c2d74daba1fd64485c62eefd1fe78999585a61")]
 [assembly: System.Reflection.AssemblyProductAttribute("QuranSchool.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("QuranSchool.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

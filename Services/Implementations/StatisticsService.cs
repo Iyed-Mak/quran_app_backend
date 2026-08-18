@@ -23,7 +23,7 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             TotalGroups = await context.Groups.AsNoTracking().CountAsync(),
             TotalCampuses = await context.Campuses.AsNoTracking().CountAsync(),
             TotalRooms = await context.Rooms.AsNoTracking().CountAsync(),
-            SuspendedStudents = students.Count(s => s.Status == "separated")
+            SuspendedStudents = students.Count(s => s.Status == "suspended")
         };
     }
 
