@@ -30,6 +30,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<DatabaseBackup> DatabaseBackups => Set<DatabaseBackup>();
     public DbSet<DatabaseBackupSetting> DatabaseBackupSettings => Set<DatabaseBackupSetting>();
     public DbSet<BackupAuditLog> BackupAuditLogs => Set<BackupAuditLog>();
+    public DbSet<SchoolInformation> SchoolInformation => Set<SchoolInformation>();
+    public DbSet<SchoolWorkingHours> SchoolWorkingHours => Set<SchoolWorkingHours>();
+    public DbSet<SchoolWorkingPeriod> SchoolWorkingPeriods => Set<SchoolWorkingPeriod>();
+    public DbSet<SchoolRule> SchoolRules => Set<SchoolRule>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -167,5 +171,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .WithMany(s => s.StudentDocuments)
             .HasForeignKey(d => d.StudentId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<SchoolInformation>()
+            .HasMany(s => s.WorkingHours)
+            .WithOne(w => w.SchoolInformation)
+            .HasForeignKey(w => w.SchoolInformationId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<SchoolInformation>()
+            .HasMany(s => s.Rules)
+            .WithOne(r => r.SchoolInformation)
+            .HasForeignKey(r => r.SchoolInformationId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<SchoolWorkingHours>()
+            .HasMany(w => w.Periods)
+            .WithOne(p => p.WorkingHours)
+            .HasForeignKey(p => p.WorkingHoursId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<SchoolRule>()
+            .HasIndex(r => new { r.SchoolInformationId, r.DisplayOrder });
     }
 }

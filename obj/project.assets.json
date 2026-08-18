@@ -3109,11 +3109,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "/home/iyed_mak/Pictures/QuranSchool.Api/QuranSchool.Api.csproj",
+      "projectUniqueName": "/tmp/quran_app_backend/QuranSchool.Api.csproj",
       "projectName": "QuranSchool.Api",
-      "projectPath": "/home/iyed_mak/Pictures/QuranSchool.Api/QuranSchool.Api.csproj",
+      "projectPath": "/tmp/quran_app_backend/QuranSchool.Api.csproj",
       "packagesPath": "/home/iyed_mak/.nuget/packages/",
-      "outputPath": "/home/iyed_mak/Pictures/QuranSchool.Api/obj/",
+      "outputPath": "/tmp/quran_app_backend/obj/",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "/home/iyed_mak/.nuget/NuGet/NuGet.Config"
