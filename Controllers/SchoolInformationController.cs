@@ -14,7 +14,7 @@ public class SchoolInformationController(ISchoolInformationService service) : Co
     public async Task<IActionResult> Get()
     {
         var result = await service.GetAsync();
-        return result is null ? NotFound() : Ok(result);
+        return Ok(result);
     }
 
     [HttpPost]
