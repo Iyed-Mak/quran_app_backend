@@ -145,6 +145,7 @@ builder.Services.AddScoped<ITeacherAttendanceService, TeacherAttendanceService>(
 builder.Services.AddScoped<IStudyScheduleService, StudyScheduleService>();
 builder.Services.AddScoped<IStudentDocumentService, StudentDocumentService>();
 builder.Services.AddScoped<ISchoolInformationService, SchoolInformationService>();
+builder.Services.AddScoped<IStatisticsService, StatisticsService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<INotificationReceiverService, NotificationReceiverService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
