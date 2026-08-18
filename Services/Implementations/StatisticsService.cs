@@ -9,31 +9,21 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
 {
     public async Task<OverviewStatisticsResponse> GetOverviewAsync()
     {
-        var now = DateOnly.FromDateTime(DateTime.UtcNow);
-
-        var totalStudents = await context.Students.CountAsync();
-        var maleStudents = await context.Students.CountAsync(s => !s.IsFemale && s.Status == "active");
-        var femaleStudents = await context.Students.CountAsync(s => s.IsFemale && s.Status == "active");
-        var totalTeachers = await context.Teachers.CountAsync(t => t.IsActive);
-        var maleTeachers = await context.Teachers.CountAsync(t => !t.IsFemale && t.IsActive);
-        var femaleTeachers = await context.Teachers.CountAsync(t => t.IsFemale && t.IsActive);
-        var totalGroups = await context.Groups.CountAsync();
-        var totalCampuses = await context.Campuses.CountAsync();
-        var totalRooms = await context.Rooms.CountAsync();
-        var suspendedStudents = await context.Students.CountAsync(s => s.Status == "separated");
+        var students = await context.Students.AsNoTracking().ToListAsync();
+        var teachers = await context.Teachers.AsNoTracking().Where(t => t.IsActive).ToListAsync();
 
         return new OverviewStatisticsResponse
         {
-            TotalStudents = totalStudents,
-            MaleStudents = maleStudents,
-            FemaleStudents = femaleStudents,
-            TotalTeachers = totalTeachers,
-            MaleTeachers = maleTeachers,
-            FemaleTeachers = femaleTeachers,
-            TotalGroups = totalGroups,
-            TotalCampuses = totalCampuses,
-            TotalRooms = totalRooms,
-            SuspendedStudents = suspendedStudents
+            TotalStudents = students.Count,
+            MaleStudents = students.Count(s => !s.IsFemale && s.Status == "active"),
+            FemaleStudents = students.Count(s => s.IsFemale && s.Status == "active"),
+            TotalTeachers = teachers.Count,
+            MaleTeachers = teachers.Count(t => !t.IsFemale),
+            FemaleTeachers = teachers.Count(t => t.IsFemale),
+            TotalGroups = await context.Groups.AsNoTracking().CountAsync(),
+            TotalCampuses = await context.Campuses.AsNoTracking().CountAsync(),
+            TotalRooms = await context.Rooms.AsNoTracking().CountAsync(),
+            SuspendedStudents = students.Count(s => s.Status == "separated")
         };
     }
 
@@ -43,51 +33,55 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         string? status, int? groupId, int? campusId)
     {
         var now = DateOnly.FromDateTime(DateTime.UtcNow);
-        var query = context.Students
+
+        var students = await context.Students
             .AsNoTracking()
             .Include(s => s.Group)
-                .ThenInclude(g => g!.StudySchedules)
-                    .ThenInclude(ss => ss.Campus)
-            .AsQueryable();
+            .ToListAsync();
+
+        var schedules = await context.StudySchedules
+            .AsNoTracking()
+            .ToListAsync();
+
+        var campusByGroup = schedules
+            .GroupBy(ss => ss.GroupId)
+            .ToDictionary(g => g.Key, g => g.First());
 
         if (!string.IsNullOrEmpty(gender))
-        {
-            if (gender == "male") query = query.Where(s => !s.IsFemale);
-            else if (gender == "female") query = query.Where(s => s.IsFemale);
-        }
+            students = gender == "male"
+                ? students.Where(s => !s.IsFemale).ToList()
+                : students.Where(s => s.IsFemale).ToList();
 
         if (!string.IsNullOrEmpty(status))
-            query = query.Where(s => s.Status == status);
+            students = students.Where(s => s.Status == status).ToList();
 
         if (groupId.HasValue)
-            query = query.Where(s => s.GroupId == groupId.Value);
+            students = students.Where(s => s.GroupId == groupId.Value).ToList();
 
         if (campusId.HasValue)
-            query = query.Where(s => s.Group != null &&
-                s.Group.StudySchedules.Any(ss => ss.CampusId == campusId.Value));
-
-        DateOnly? filterDateFrom = null;
-        DateOnly? filterDateTo = null;
+        {
+            var groupIds = schedules.Where(ss => ss.CampusId == campusId.Value).Select(ss => ss.GroupId).Distinct().ToHashSet();
+            students = students.Where(s => s.GroupId.HasValue && groupIds.Contains(s.GroupId.Value)).ToList();
+        }
 
         if (!string.IsNullOrEmpty(dateFilter))
         {
-            filterDateFrom = dateFilter switch
+            DateOnly? filterFrom = dateFilter switch
             {
                 "today" => now,
                 "week" => now.AddDays(-(int)now.DayOfWeek),
                 "month" => new DateOnly(now.Year, now.Month, 1),
                 "year" => new DateOnly(now.Year, 1, 1),
-                _ => dateFrom
+                "custom" => dateFrom,
+                _ => null
             };
-            filterDateTo = dateFilter == "custom" ? dateTo : now;
+            var filterTo = dateFilter == "custom" ? dateTo : now;
+
+            if (filterFrom.HasValue)
+                students = students.Where(s => s.CreatedAt >= filterFrom.Value.ToDateTime(TimeOnly.MinValue)).ToList();
+            if (filterTo.HasValue)
+                students = students.Where(s => s.CreatedAt <= filterTo.Value.ToDateTime(TimeOnly.MaxValue)).ToList();
         }
-
-        if (filterDateFrom.HasValue)
-            query = query.Where(s => s.CreatedAt >= filterDateFrom.Value.ToDateTime(TimeOnly.MinValue));
-        if (filterDateTo.HasValue)
-            query = query.Where(s => s.CreatedAt <= filterDateTo.Value.ToDateTime(TimeOnly.MaxValue));
-
-        var students = await query.ToListAsync();
 
         if (!string.IsNullOrEmpty(ageFilter))
         {
@@ -105,29 +99,25 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             };
         }
 
-        var campusLookup = context.StudySchedules
-            .AsNoTracking()
-            .GroupBy(ss => ss.GroupId)
-            .Select(g => new { GroupId = g.Key, CampusId = g.First().CampusId, CampusName = g.First().Campus!.Name })
-            .ToDictionaryAsync(x => x.GroupId);
-
-        var campusMap = await campusLookup;
-
         return new StudentStatisticsResponse
         {
             TotalCount = students.Count,
-            Students = students.Select(s => new StudentListItem
+            Students = students.Select(s =>
             {
-                Id = s.Id,
-                FullName = s.FullName,
-                IsFemale = s.IsFemale,
-                Age = now.Year - s.DateOfBirth.Year - (now.DayOfYear < s.DateOfBirth.DayOfYear ? 1 : 0),
-                Status = s.Status,
-                GroupId = s.GroupId,
-                GroupName = s.Group?.Name,
-                CampusId = s.Group != null && campusMap.ContainsKey(s.GroupId ?? 0) ? campusMap[s.GroupId!.Value].CampusId : null,
-                CampusName = s.Group != null && campusMap.ContainsKey(s.GroupId ?? 0) ? campusMap[s.GroupId!.Value].CampusName : null,
-                CreatedAt = s.CreatedAt
+                campusByGroup.TryGetValue(s.GroupId ?? 0, out var sch);
+                return new StudentListItem
+                {
+                    Id = s.Id,
+                    FullName = s.FullName,
+                    IsFemale = s.IsFemale,
+                    Age = now.Year - s.DateOfBirth.Year - (now.DayOfYear < s.DateOfBirth.DayOfYear ? 1 : 0),
+                    Status = s.Status,
+                    GroupId = s.GroupId,
+                    GroupName = s.Group?.Name,
+                    CampusId = sch?.CampusId,
+                    CampusName = null,
+                    CreatedAt = s.CreatedAt
+                };
             }).ToList()
         };
     }
@@ -168,16 +158,28 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         var groups = await context.Groups
             .AsNoTracking()
             .Include(g => g.Teacher)
-            .Include(g => g.Students)
             .ToListAsync();
 
-        var details = groups.Select(g => new GroupDetail
+        var studentCounts = await context.Students
+            .AsNoTracking()
+            .Where(s => s.GroupId != null)
+            .GroupBy(s => s.GroupId!.Value)
+            .Select(g => new { GroupId = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        var countMap = studentCounts.ToDictionary(x => x.GroupId, x => x.Count);
+
+        var details = groups.Select(g =>
         {
-            Id = g.Id,
-            Name = g.Name,
-            IsFemale = g.IsFemale,
-            TeacherName = g.Teacher?.FullName,
-            StudentCount = g.Students.Count
+            countMap.TryGetValue(g.Id, out var cnt);
+            return new GroupDetail
+            {
+                Id = g.Id,
+                Name = g.Name,
+                IsFemale = g.IsFemale,
+                TeacherName = g.Teacher?.FullName,
+                StudentCount = cnt
+            };
         }).ToList();
 
         var avgCount = details.Any() ? details.Average(d => d.StudentCount) : 0;
@@ -196,22 +198,43 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         var teachers = await context.Teachers
             .AsNoTracking()
             .Where(t => t.IsActive)
-            .Include(t => t.Groups)
-                .ThenInclude(g => g!.Students)
             .ToListAsync();
 
-        var details = teachers.Select(t => new TeacherDetail
+        var groups = await context.Groups
+            .AsNoTracking()
+            .ToListAsync();
+
+        var studentCounts = await context.Students
+            .AsNoTracking()
+            .Where(s => s.GroupId != null)
+            .GroupBy(s => s.GroupId!.Value)
+            .Select(g => new { GroupId = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        var studentCountMap = studentCounts.ToDictionary(x => x.GroupId, x => x.Count);
+        var groupCountByTeacher = groups.Where(g => g.TeacherId != null).GroupBy(g => g.TeacherId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+        var studentCountByTeacher = groups.Where(g => g.TeacherId != null)
+            .GroupBy(g => g.TeacherId!.Value)
+            .ToDictionary(g => g.Key, g => g.Sum(gr => studentCountMap.GetValueOrDefault(gr.Id)));
+
+        var details = teachers.Select(t =>
         {
-            Id = t.Id,
-            FullName = t.FullName,
-            IsFemale = t.IsFemale,
-            GroupCount = t.Groups.Count,
-            StudentCount = t.Groups.SelectMany(g => g!.Students).Count()
+            groupCountByTeacher.TryGetValue(t.Id, out var gc);
+            studentCountByTeacher.TryGetValue(t.Id, out var sc);
+            return new TeacherDetail
+            {
+                Id = t.Id,
+                FullName = t.FullName,
+                IsFemale = t.IsFemale,
+                GroupCount = gc,
+                StudentCount = sc
+            };
         }).ToList();
 
         var total = details.Count;
         var totalStudents = details.Sum(d => d.StudentCount);
-        var totalGroups = details.Sum(d => d.GroupCount);
+        var totalGroupsCount = details.Sum(d => d.GroupCount);
 
         return new TeacherStatisticsResponse
         {
@@ -220,44 +243,39 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             FemaleTeachers = details.Count(d => d.IsFemale),
             TeachersWithoutGroups = details.Count(d => d.GroupCount == 0),
             AvgStudentsPerTeacher = total > 0 ? Math.Round((double)totalStudents / total, 1) : 0,
-            AvgGroupsPerTeacher = total > 0 ? Math.Round((double)totalGroups / total, 1) : 0,
+            AvgGroupsPerTeacher = total > 0 ? Math.Round((double)totalGroupsCount / total, 1) : 0,
             Teachers = details.OrderByDescending(d => d.StudentCount).ToList()
         };
     }
 
     public async Task<CampusStatisticsResponse> GetCampusStatisticsAsync()
     {
-        var campuses = await context.Campuses
-            .AsNoTracking()
-            .Include(c => c.Rooms)
-            .ToListAsync();
-
-        var campusIds = campuses.Select(c => c.Id).ToList();
-
-        var scheduleData = await context.StudySchedules
-            .AsNoTracking()
-            .Where(ss => campusIds.Contains(ss.CampusId))
-            .GroupBy(ss => ss.CampusId)
-            .Select(g => new
-            {
-                CampusId = g.Key,
-                GroupCount = g.Select(ss => ss.GroupId).Distinct().Count(),
-                StudentCount = g.SelectMany(ss => ss.Group!.Students).Count(),
-                TeacherCount = g.Select(ss => ss.Group!.TeacherId).Distinct().Count()
-            })
-            .ToDictionaryAsync(x => x.CampusId);
+        var campuses = await context.Campuses.AsNoTracking().ToListAsync();
+        var rooms = await context.Rooms.AsNoTracking().ToListAsync();
+        var schedules = await context.StudySchedules.AsNoTracking().ToListAsync();
+        var allGroups = await context.Groups.AsNoTracking().ToListAsync();
+        var allTeachers = await context.Teachers.AsNoTracking().ToListAsync();
 
         var details = campuses.Select(c =>
         {
-            scheduleData.TryGetValue(c.Id, out var data);
+            var campusRoomCount = rooms.Count(r => r.CampusId == c.Id);
+            var campusSchedules = schedules.Where(ss => ss.CampusId == c.Id).ToList();
+            var campusGroupIds = campusSchedules.Select(ss => ss.GroupId).Distinct().ToList();
+            var groupCount = campusGroupIds.Count;
+            var campusStudents = context.Students.AsNoTracking().Count(s =>
+                s.GroupId != null && campusGroupIds.Contains(s.GroupId.Value));
+            var teacherCount = campusGroupIds
+                .Select(gid => allGroups.FirstOrDefault(g => g.Id == gid)?.TeacherId)
+                .Where(tid => tid.HasValue).Distinct().Count();
+
             return new CampusDetail
             {
                 Id = c.Id,
                 Name = c.Name,
-                RoomCount = c.Rooms.Count,
-                GroupCount = data?.GroupCount ?? 0,
-                StudentCount = data?.StudentCount ?? 0,
-                TeacherCount = data?.TeacherCount ?? 0
+                RoomCount = campusRoomCount,
+                GroupCount = groupCount,
+                StudentCount = campusStudents,
+                TeacherCount = teacherCount
             };
         }).ToList();
 
@@ -275,22 +293,25 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             .Include(r => r.Campus)
             .ToListAsync();
 
-        var occupiedRoomIds = await context.StudySchedules
-            .AsNoTracking()
-            .Select(ss => ss.RoomId)
-            .Distinct()
-            .ToListAsync();
+        var schedules = await context.StudySchedules.AsNoTracking().ToListAsync();
 
-        var roomGroupMap = await context.StudySchedules
-            .AsNoTracking()
+        var occupiedRoomIds = schedules.Select(ss => ss.RoomId).Distinct().ToHashSet();
+
+        var roomGroupMap = schedules
             .GroupBy(ss => ss.RoomId)
-            .Select(g => new { RoomId = g.Key, GroupName = g.First().Group!.Name })
-            .ToDictionaryAsync(x => x.RoomId, x => x.GroupName);
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var groupIds = schedules.Select(ss => ss.GroupId).Distinct().ToList();
+        var groupNames = await context.Groups.AsNoTracking()
+            .Where(g => groupIds.Contains(g.Id))
+            .ToListAsync();
+        var groupNameMap = groupNames.ToDictionary(g => g.Id, g => g.Name);
 
         var details = rooms.Select(r =>
         {
             var isOccupied = occupiedRoomIds.Contains(r.Id);
-            roomGroupMap.TryGetValue(r.Id, out var groupName);
+            roomGroupMap.TryGetValue(r.Id, out var sch);
+            groupNameMap.TryGetValue(sch?.GroupId ?? 0, out var groupName);
             return new RoomDetail
             {
                 Id = r.Id,
@@ -301,13 +322,11 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             };
         }).ToList();
 
-        var occupiedCount = occupiedRoomIds.Count;
-
         return new RoomStatisticsResponse
         {
             TotalRooms = rooms.Count,
-            OccupiedRooms = occupiedCount,
-            EmptyRooms = rooms.Count - occupiedCount,
+            OccupiedRooms = occupiedRoomIds.Count,
+            EmptyRooms = rooms.Count - occupiedRoomIds.Count,
             Rooms = details
         };
     }
@@ -329,33 +348,55 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         var evaluations = await context.DailyEvaluations
             .AsNoTracking()
             .Where(e => e.SessionDate >= start && e.SessionDate <= end)
-            .Include(e => e.Student)
-                .ThenInclude(s => s!.Group)
             .ToListAsync();
 
-        var present = evaluations.Count(e => e.Attendance == "present");
-        var absent = evaluations.Count(e => e.Attendance == "absent");
-        var total = present + absent;
+        var studentIds = evaluations.Select(e => e.StudentId).Distinct().ToList();
+        var students = await context.Students.AsNoTracking()
+            .Include(s => s.Group)
+            .Where(s => studentIds.Contains(s.Id))
+            .ToListAsync();
+        var studentMap = students.ToDictionary(s => s.Id, s => s);
 
-        var byGroup = evaluations
-            .Where(e => e.Student?.Group != null)
-            .GroupBy(e => e.Student!.Group!)
-            .Select(g =>
+        var present = 0;
+        var absent = 0;
+        var byGroupDict = new Dictionary<int, (int present, int absent)>();
+
+        foreach (var e in evaluations)
+        {
+            if (e.Attendance == "present") present++;
+            else if (e.Attendance == "absent") absent++;
+
+            if (studentMap.TryGetValue(e.StudentId, out var stu) && stu.GroupId.HasValue)
             {
-                var p = g.Count(e => e.Attendance == "present");
-                var a = g.Count(e => e.Attendance == "absent");
-                var t = p + a;
-                return new GroupAttendanceDetail
-                {
-                    GroupId = g.Key.Id,
-                    GroupName = g.Key.Name,
-                    Present = p,
-                    Absent = a,
-                    AttendanceRate = t > 0 ? Math.Round((double)p / t * 100, 1) : 0
-                };
-            })
-            .OrderByDescending(d => d.AttendanceRate)
-            .ToList();
+                var gid = stu.GroupId.Value;
+                var current = byGroupDict.GetValueOrDefault(gid);
+                if (e.Attendance == "present")
+                    byGroupDict[gid] = (current.present + 1, current.absent);
+                else if (e.Attendance == "absent")
+                    byGroupDict[gid] = (current.present, current.absent + 1);
+            }
+        }
+
+        var total = present + absent;
+        var groupIds = byGroupDict.Keys.ToList();
+        var groupNames = await context.Groups.AsNoTracking()
+            .Where(g => groupIds.Contains(g.Id))
+            .ToListAsync();
+        var groupNameMap = groupNames.ToDictionary(g => g.Id, g => g.Name);
+
+        var byGroup = byGroupDict.Select(kv =>
+        {
+            var t = kv.Value.present + kv.Value.absent;
+            groupNameMap.TryGetValue(kv.Key, out var name);
+            return new GroupAttendanceDetail
+            {
+                GroupId = kv.Key,
+                GroupName = name ?? string.Empty,
+                Present = kv.Value.present,
+                Absent = kv.Value.absent,
+                AttendanceRate = t > 0 ? Math.Round((double)kv.Value.present / t * 100, 1) : 0
+            };
+        }).OrderByDescending(d => d.AttendanceRate).ToList();
 
         return new AttendanceStatisticsResponse
         {
@@ -369,85 +410,89 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
 
     public async Task<AcademicStatisticsResponse> GetAcademicStatisticsAsync()
     {
-        var evaluations = await context.DailyEvaluations
-            .AsNoTracking()
-            .Include(e => e.Student)
-                .ThenInclude(s => s!.Group)
+        var evaluations = await context.DailyEvaluations.AsNoTracking().ToListAsync();
+
+        var evalValues = evaluations.Where(e => e.Evaluation.HasValue).Select(e => (double)e.Evaluation!.Value).ToList();
+        var avgEvaluation = evalValues.Any() ? Math.Round(evalValues.Average(), 2) : 0;
+
+        var memValues = evaluations.Where(e => !string.IsNullOrEmpty(e.NewMemorization) && double.TryParse(e.NewMemorization, out _))
+            .Select(e => double.Parse(e.NewMemorization!)).ToList();
+        var avgMemorization = memValues.Any() ? Math.Round(memValues.Average(), 2) : 0;
+
+        var revValues = evaluations.Where(e => !string.IsNullOrEmpty(e.ReviewQuantity) && double.TryParse(e.ReviewQuantity, out _))
+            .Select(e => double.Parse(e.ReviewQuantity!)).ToList();
+        var avgReview = revValues.Any() ? Math.Round(revValues.Average(), 2) : 0;
+
+        var lowEvalStudents = evaluations.Where(e => e.Evaluation.HasValue && e.Evaluation < 10)
+            .Select(e => e.StudentId).Distinct().Count();
+
+        var examResults = await context.ExamResults.AsNoTracking().ToListAsync();
+        var grades = examResults.Where(r => r.FinalGrade.HasValue).Select(r => (double)r.FinalGrade!.Value).ToList();
+        var avgExam = grades.Any() ? Math.Round(grades.Average(), 2) : 0;
+        var lowExamStudents = examResults.Where(r => r.FinalGrade.HasValue && r.FinalGrade < 10)
+            .Select(r => r.StudentId).Distinct().Count();
+
+        var studentIds = evaluations.Where(e => e.StudentId != 0).Select(e => e.StudentId).Distinct().ToList();
+        var students = await context.Students.AsNoTracking()
+            .Include(s => s.Group)
+            .Where(s => studentIds.Contains(s.Id))
             .ToListAsync();
+        var studentMap = students.ToDictionary(s => s.Id, s => s);
 
-        var avgEvaluation = evaluations.Where(e => e.Evaluation.HasValue)
-            .Select(e => (double)e.Evaluation!.Value)
-            .DefaultIfEmpty(0)
-            .Average();
+        var byGroupDict = new Dictionary<int, List<double>>();
+        var byGroupMem = new Dictionary<int, List<double>>();
+        var byGroupRev = new Dictionary<int, List<double>>();
 
-        var avgMemorization = 0.0;
-        var avgReview = 0.0;
-        var needingFollowUp = 0;
+        foreach (var e in evaluations)
+        {
+            if (!studentMap.TryGetValue(e.StudentId, out var stu) || !stu.GroupId.HasValue) continue;
+            var gid = stu.GroupId.Value;
 
-        var memValues = evaluations.Where(e => !string.IsNullOrEmpty(e.NewMemorization))
-            .Select(e => double.TryParse(e.NewMemorization, out var v) ? v : (double?)null)
-            .Where(v => v.HasValue)
-            .Select(v => v!.Value)
-            .ToList();
-        if (memValues.Any()) avgMemorization = Math.Round(memValues.Average(), 2);
-
-        var revValues = evaluations.Where(e => !string.IsNullOrEmpty(e.ReviewQuantity))
-            .Select(e => double.TryParse(e.ReviewQuantity, out var v) ? v : (double?)null)
-            .Where(v => v.HasValue)
-            .Select(v => v!.Value)
-            .ToList();
-        if (revValues.Any()) avgReview = Math.Round(revValues.Average(), 2);
-
-        var examResults = await context.ExamResults
-            .AsNoTracking()
-            .Where(e => e.FinalGrade.HasValue)
-            .ToListAsync();
-
-        var avgExam = examResults.Any()
-            ? Math.Round((double)examResults.Average(e => e.FinalGrade!.Value), 2)
-            : 0;
-
-        var lowEvalStudents = evaluations
-            .Where(e => e.Evaluation.HasValue && e.Evaluation < 10)
-            .Select(e => e.StudentId)
-            .Distinct()
-            .Count();
-
-        var lowExamStudents = examResults
-            .Where(e => e.FinalGrade.HasValue && e.FinalGrade < 10)
-            .Select(e => e.StudentId)
-            .Distinct()
-            .Count();
-
-        needingFollowUp = lowEvalStudents + lowExamStudents;
-
-        var byGroup = evaluations
-            .Where(e => e.Student?.Group != null)
-            .GroupBy(e => e.Student!.Group!)
-            .Select(g => new GroupAcademicDetail
+            if (e.Evaluation.HasValue)
             {
-                GroupId = g.Key.Id,
-                GroupName = g.Key.Name,
-                AvgEvaluation = Math.Round(g.Where(e => e.Evaluation.HasValue).Select(e => (double)e.Evaluation!.Value).DefaultIfEmpty(0).Average(), 2),
-                AvgMemorization = Math.Round(
-                    g.Where(e => !string.IsNullOrEmpty(e.NewMemorization))
-                     .Select(e => double.TryParse(e.NewMemorization, out var v) ? v : (double?)null)
-                     .Where(v => v.HasValue).Select(v => v!.Value)
-                     .DefaultIfEmpty(0).Average(), 2),
-                AvgReview = Math.Round(
-                    g.Where(e => !string.IsNullOrEmpty(e.ReviewQuantity))
-                     .Select(e => double.TryParse(e.ReviewQuantity, out var v) ? v : (double?)null)
-                     .Where(v => v.HasValue).Select(v => v!.Value)
-                     .DefaultIfEmpty(0).Average(), 2)
-            })
-            .ToList();
+                byGroupDict.TryAdd(gid, new List<double>());
+                byGroupDict[gid].Add((double)e.Evaluation!.Value);
+            }
+            if (!string.IsNullOrEmpty(e.NewMemorization) && double.TryParse(e.NewMemorization, out var mv))
+            {
+                byGroupMem.TryAdd(gid, new List<double>());
+                byGroupMem[gid].Add(mv);
+            }
+            if (!string.IsNullOrEmpty(e.ReviewQuantity) && double.TryParse(e.ReviewQuantity, out var rv))
+            {
+                byGroupRev.TryAdd(gid, new List<double>());
+                byGroupRev[gid].Add(rv);
+            }
+        }
+
+        var allGroupIds = byGroupDict.Keys.Union(byGroupMem.Keys).Union(byGroupRev.Keys).Distinct().ToList();
+        var groupNames = await context.Groups.AsNoTracking()
+            .Where(g => allGroupIds.Contains(g.Id))
+            .ToListAsync();
+        var groupNameMap = groupNames.ToDictionary(g => g.Id, g => g.Name);
+
+        var byGroup = allGroupIds.Select(gid =>
+        {
+            groupNameMap.TryGetValue(gid, out var name);
+            byGroupDict.TryGetValue(gid, out var ev);
+            byGroupMem.TryGetValue(gid, out var mem);
+            byGroupRev.TryGetValue(gid, out var rev);
+            return new GroupAcademicDetail
+            {
+                GroupId = gid,
+                GroupName = name ?? string.Empty,
+                AvgEvaluation = ev != null && ev.Any() ? Math.Round(ev.Average(), 2) : 0,
+                AvgMemorization = mem != null && mem.Any() ? Math.Round(mem.Average(), 2) : 0,
+                AvgReview = rev != null && rev.Any() ? Math.Round(rev.Average(), 2) : 0
+            };
+        }).ToList();
 
         return new AcademicStatisticsResponse
         {
-            AvgEvaluation = Math.Round(avgEvaluation, 2),
+            AvgEvaluation = avgEvaluation,
             AvgMemorization = avgMemorization,
             AvgReview = avgReview,
-            StudentsNeedingFollowUp = needingFollowUp,
+            StudentsNeedingFollowUp = lowEvalStudents + lowExamStudents,
             AvgExamResult = avgExam,
             ByGroup = byGroup
         };
@@ -456,36 +501,34 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
     public async Task<ExamStatisticsResponse> GetExamStatisticsAsync(
         int? semesterId, int? groupId, string? gender)
     {
-        var query = context.Exams
-            .AsNoTracking()
-            .Include(e => e.Results)
-            .Include(e => e.Group)
-            .AsQueryable();
+        var query = context.Exams.AsNoTracking().AsQueryable();
 
         if (semesterId.HasValue)
-        {
             query = query.Where(e => e.ExamPlan.SemesterId == semesterId.Value);
-        }
-
         if (groupId.HasValue)
             query = query.Where(e => e.GroupId == groupId.Value);
-
         if (!string.IsNullOrEmpty(gender))
         {
-            if (gender == "male")
-                query = query.Where(e => e.Group != null && !e.Group.IsFemale);
-            else if (gender == "female")
-                query = query.Where(e => e.Group != null && e.Group.IsFemale);
+            var groups = await context.Groups.AsNoTracking().ToListAsync();
+            var groupIds = gender == "male"
+                ? groups.Where(g => !g.IsFemale).Select(g => g.Id).ToList()
+                : groups.Where(g => g.IsFemale).Select(g => g.Id).ToList();
+            query = query.Where(e => groupIds.Contains(e.GroupId));
         }
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var exams = await query.ToListAsync();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         var completed = exams.Where(e => e.ExamDate <= today).ToList();
         var upcoming = exams.Where(e => e.ExamDate > today).ToList();
 
-        var allResults = completed.SelectMany(e => e.Results).ToList();
-        var grades = allResults.Where(r => r.FinalGrade.HasValue).Select(r => (double)r.FinalGrade!.Value).ToList();
+        var examIds = completed.Select(e => e.Id).ToList();
+        var allResults = await context.ExamResults.AsNoTracking()
+            .Where(r => examIds.Contains(r.ExamId))
+            .ToListAsync();
+
+        var grades = allResults.Where(r => r.FinalGrade.HasValue)
+            .Select(r => (double)r.FinalGrade!.Value).ToList();
 
         return new ExamStatisticsResponse
         {

@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:8.0.424 AS build
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
 COPY ["QuranSchool.Api.csproj", "./"]
@@ -7,7 +7,7 @@ RUN dotnet restore "QuranSchool.Api.csproj"
 COPY . .
 RUN dotnet publish "QuranSchool.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0.30 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
 ENV ASPNETCORE_URLS=http://+:8080
