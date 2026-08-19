@@ -28,8 +28,9 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
     }
 
     public async Task<StudentStatisticsResponse> GetStudentStatisticsAsync(
-        string? gender, string? dateFilter, DateOnly? dateFrom, DateOnly? dateTo,
-        string? ageFilter, int? ageMin, int? ageMax,
+        string? gender,
+        string? ageOperator, int? ageValue,
+        string? regDateOperator, DateOnly? regDate,
         string? status, int? groupId, int? campusId)
     {
         var now = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -64,37 +65,26 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             students = students.Where(s => s.GroupId.HasValue && groupIds.Contains(s.GroupId.Value)).ToList();
         }
 
-        if (!string.IsNullOrEmpty(dateFilter))
+        if (!string.IsNullOrEmpty(ageOperator) && ageValue.HasValue)
         {
-            DateOnly? filterFrom = dateFilter switch
+            var n = ageValue.Value;
+            students = ageOperator switch
             {
-                "today" => now,
-                "week" => now.AddDays(-(int)now.DayOfWeek),
-                "month" => new DateOnly(now.Year, now.Month, 1),
-                "year" => new DateOnly(now.Year, 1, 1),
-                "custom" => dateFrom,
-                _ => null
+                "gt" => students.Where(s => s.DateOfBirth <= now.AddYears(-n - 1)).ToList(),
+                "lt" => students.Where(s => s.DateOfBirth > now.AddYears(-n)).ToList(),
+                "eq" => students.Where(s => s.DateOfBirth > now.AddYears(-n - 1) && s.DateOfBirth <= now.AddYears(-n)).ToList(),
+                _ => students
             };
-            var filterTo = dateFilter == "custom" ? dateTo : now;
-
-            if (filterFrom.HasValue)
-                students = students.Where(s => s.CreatedAt >= filterFrom.Value.ToDateTime(TimeOnly.MinValue)).ToList();
-            if (filterTo.HasValue)
-                students = students.Where(s => s.CreatedAt <= filterTo.Value.ToDateTime(TimeOnly.MaxValue)).ToList();
         }
 
-        if (!string.IsNullOrEmpty(ageFilter))
+        if (!string.IsNullOrEmpty(regDateOperator) && regDate.HasValue)
         {
-            students = ageFilter switch
+            var d = regDate.Value;
+            students = regDateOperator switch
             {
-                "under10" => students.Where(s => s.DateOfBirth > now.AddYears(-10)).ToList(),
-                "10to15" => students.Where(s => s.DateOfBirth <= now.AddYears(-10) && s.DateOfBirth > now.AddYears(-15)).ToList(),
-                "over15" => students.Where(s => s.DateOfBirth <= now.AddYears(-15)).ToList(),
-                "over16" => students.Where(s => s.DateOfBirth <= now.AddYears(-16)).ToList(),
-                "custom" when ageMin.HasValue && ageMax.HasValue =>
-                    students.Where(s =>
-                        s.DateOfBirth <= now.AddYears(-ageMin.Value) &&
-                        s.DateOfBirth > now.AddYears(-ageMax.Value - 1)).ToList(),
+                "before" => students.Where(s => s.CreatedAt < d.ToDateTime(TimeOnly.MaxValue)).ToList(),
+                "after" => students.Where(s => s.CreatedAt > d.ToDateTime(TimeOnly.MinValue)).ToList(),
+                "on" => students.Where(s => s.CreatedAt >= d.ToDateTime(TimeOnly.MinValue) && s.CreatedAt <= d.ToDateTime(TimeOnly.MaxValue)).ToList(),
                 _ => students
             };
         }

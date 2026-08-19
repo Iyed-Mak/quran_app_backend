@@ -6,8 +6,9 @@ public interface IStatisticsService
 {
     Task<OverviewStatisticsResponse> GetOverviewAsync();
     Task<StudentStatisticsResponse> GetStudentStatisticsAsync(
-        string? gender, string? dateFilter, DateOnly? dateFrom, DateOnly? dateTo,
-        string? ageFilter, int? ageMin, int? ageMax,
+        string? gender,
+        string? ageOperator, int? ageValue,
+        string? regDateOperator, DateOnly? regDate,
         string? status, int? groupId, int? campusId);
     Task<RegistrationStatisticsResponse> GetRegistrationStatisticsAsync(
         string? period, DateOnly? dateFrom, DateOnly? dateTo);

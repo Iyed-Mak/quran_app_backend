@@ -17,18 +17,16 @@ public class StatisticsController(IStatisticsService service) : ControllerBase
     [HttpGet("students")]
     public async Task<IActionResult> GetStudents(
         [FromQuery] string? gender,
-        [FromQuery] string? dateFilter,
-        [FromQuery] DateOnly? dateFrom,
-        [FromQuery] DateOnly? dateTo,
-        [FromQuery] string? ageFilter,
-        [FromQuery] int? ageMin,
-        [FromQuery] int? ageMax,
+        [FromQuery] string? ageOperator,
+        [FromQuery] int? ageValue,
+        [FromQuery] string? regDateOperator,
+        [FromQuery] DateOnly? regDate,
         [FromQuery] string? status,
         [FromQuery] int? groupId,
         [FromQuery] int? campusId)
         => Ok(await service.GetStudentStatisticsAsync(
-            gender, dateFilter, dateFrom, dateTo,
-            ageFilter, ageMin, ageMax,
+            gender, ageOperator, ageValue,
+            regDateOperator, regDate,
             status, groupId, campusId));
 
     [HttpGet("registrations")]
