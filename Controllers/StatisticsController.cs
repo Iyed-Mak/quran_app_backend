@@ -24,10 +24,27 @@ public class StatisticsController(IStatisticsService service) : ControllerBase
         [FromQuery] string? status,
         [FromQuery] int? groupId,
         [FromQuery] int? campusId)
-        => Ok(await service.GetStudentStatisticsAsync(
+    {
+        Console.WriteLine($"━━━ STATISTICS FILTER ━━━");
+        Console.WriteLine($"gender: {gender}");
+        Console.WriteLine($"ageOperator: {ageOperator}");
+        Console.WriteLine($"ageValue: {ageValue}");
+        Console.WriteLine($"regDateOperator: {regDateOperator}");
+        Console.WriteLine($"regDate: {regDate}");
+        Console.WriteLine($"status: {status}");
+        Console.WriteLine($"groupId: {groupId}");
+        Console.WriteLine($"campusId: {campusId}");
+        Console.WriteLine($"Request QueryString: {HttpContext.Request.QueryString}");
+        Console.WriteLine($"All Query Params: {string.Join(", ", HttpContext.Request.Query.Select(kv => $"{kv.Key}={kv.Value}"))}");
+
+        var result = await service.GetStudentStatisticsAsync(
             gender, ageOperator, ageValue,
             regDateOperator, regDate,
-            status, groupId, campusId));
+            status, groupId, campusId);
+
+        Console.WriteLine($"Result: {result.TotalCount} students");
+        return Ok(result);
+    }
 
     [HttpGet("registrations")]
     public async Task<IActionResult> GetRegistrations(
