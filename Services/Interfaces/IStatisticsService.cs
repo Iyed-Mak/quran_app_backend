@@ -15,7 +15,7 @@ public interface IStatisticsService
     Task<GroupStatisticsResponse> GetGroupStatisticsAsync();
     Task<TeacherStatisticsResponse> GetTeacherStatisticsAsync();
     Task<CampusStatisticsResponse> GetCampusStatisticsAsync();
-    Task<RoomStatisticsResponse> GetRoomStatisticsAsync();
+    Task<RoomStatisticsResponse> GetRoomStatisticsAsync(string? weekday);
     Task<AttendanceStatisticsResponse> GetAttendanceStatisticsAsync(
         string? period, DateOnly? dateFrom, DateOnly? dateTo,
         int? month, int? year, string? gender);

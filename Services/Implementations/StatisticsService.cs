@@ -276,46 +276,68 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         };
     }
 
-    public async Task<RoomStatisticsResponse> GetRoomStatisticsAsync()
+    public async Task<RoomStatisticsResponse> GetRoomStatisticsAsync(string? weekday)
     {
         var rooms = await context.Rooms
             .AsNoTracking()
             .Include(r => r.Campus)
             .ToListAsync();
 
-        var schedules = await context.StudySchedules.AsNoTracking().ToListAsync();
+        var allSchedules = await context.StudySchedules.AsNoTracking().ToListAsync();
 
-        var occupiedRoomIds = schedules.Select(ss => ss.RoomId).Distinct().ToHashSet();
+        var filteredSchedules = !string.IsNullOrEmpty(weekday)
+            ? allSchedules.Where(ss => ss.Weekday == weekday).ToList()
+            : allSchedules;
 
-        var schedulesByRoom = schedules
+        var occupiedRoomIds = filteredSchedules.Select(ss => ss.RoomId).Distinct().ToHashSet();
+
+        var schedulesByRoom = filteredSchedules
             .GroupBy(ss => ss.RoomId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        var groupIds = schedules.Select(ss => ss.GroupId).Distinct().ToList();
-        var groupNames = await context.Groups.AsNoTracking()
-            .Where(g => groupIds.Contains(g.Id))
+        var allGroupIds = filteredSchedules.Select(ss => ss.GroupId).Distinct().ToList();
+        var allGroups = await context.Groups.AsNoTracking()
+            .Where(g => allGroupIds.Contains(g.Id))
             .ToListAsync();
-        var groupNameMap = groupNames.ToDictionary(g => g.Id, g => g.Name);
+        var groupNameMap = allGroups.ToDictionary(g => g.Id, g => g.Name);
 
-        var details = rooms.Select(r =>
+        var details = new List<RoomDetail>();
+        foreach (var r in rooms)
         {
             var isOccupied = occupiedRoomIds.Contains(r.Id);
             schedulesByRoom.TryGetValue(r.Id, out var roomSchedules);
-            var firstSchedule = roomSchedules?.FirstOrDefault();
-            groupNameMap.TryGetValue(firstSchedule?.GroupId ?? 0, out var groupName);
-            var weekday = firstSchedule?.Weekday;
-            var timeSlot = firstSchedule?.TimeSlot;
-            return new RoomDetail
+
+            if (roomSchedules != null && roomSchedules.Count > 0)
             {
-                Id = r.Id,
-                Name = r.Name,
-                CampusName = r.Campus?.Name ?? string.Empty,
-                IsOccupied = isOccupied,
-                GroupName = groupName,
-                Weekday = weekday,
-                TimeSlot = timeSlot
-            };
-        }).ToList();
+                foreach (var sch in roomSchedules)
+                {
+                    groupNameMap.TryGetValue(sch.GroupId, out var name);
+                    details.Add(new RoomDetail
+                    {
+                        Id = r.Id,
+                        Name = r.Name,
+                        CampusName = r.Campus?.Name ?? string.Empty,
+                        IsOccupied = true,
+                        GroupName = name,
+                        Weekday = sch.Weekday,
+                        TimeSlot = sch.TimeSlot
+                    });
+                }
+            }
+            else
+            {
+                details.Add(new RoomDetail
+                {
+                    Id = r.Id,
+                    Name = r.Name,
+                    CampusName = r.Campus?.Name ?? string.Empty,
+                    IsOccupied = false,
+                    GroupName = null,
+                    Weekday = null,
+                    TimeSlot = null
+                });
+            }
+        }
 
         return new RoomStatisticsResponse
         {

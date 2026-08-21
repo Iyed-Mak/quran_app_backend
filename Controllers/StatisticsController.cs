@@ -49,8 +49,9 @@ public class StatisticsController(IStatisticsService service) : ControllerBase
         => Ok(await service.GetCampusStatisticsAsync());
 
     [HttpGet("rooms")]
-    public async Task<IActionResult> GetRooms()
-        => Ok(await service.GetRoomStatisticsAsync());
+    public async Task<IActionResult> GetRooms(
+        [FromQuery] string? weekday)
+        => Ok(await service.GetRoomStatisticsAsync(weekday));
 
     [HttpGet("attendance")]
     public async Task<IActionResult> GetAttendance(
