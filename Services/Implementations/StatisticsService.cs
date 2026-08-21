@@ -7,15 +7,14 @@ using QuranSchool.Api.Services.Interfaces;
 
 namespace QuranSchool.Api.Services.Implementations;
 
-public partial class StatisticsService(AppDbContext context) : IStatisticsService
+public class StatisticsService(AppDbContext context) : IStatisticsService
 {
-    [GeneratedRegex(@"\d+(\.\d+)?")]
-    private static partial Regex NumberRegex();
+    private static readonly Regex NumberRx = new(@"\d+(\.\d+)?", RegexOptions.Compiled);
 
     private static double? ExtractNumber(string? s)
     {
         if (string.IsNullOrWhiteSpace(s)) return null;
-        var m = NumberRegex().Match(s);
+        var m = NumberRx.Match(s);
         return m.Success && double.TryParse(m.Value, CultureInfo.InvariantCulture, out var v) ? v : null;
     }
 
