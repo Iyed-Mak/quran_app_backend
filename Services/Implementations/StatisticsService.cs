@@ -287,9 +287,9 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
 
         var occupiedRoomIds = schedules.Select(ss => ss.RoomId).Distinct().ToHashSet();
 
-        var roomGroupMap = schedules
+        var schedulesByRoom = schedules
             .GroupBy(ss => ss.RoomId)
-            .ToDictionary(g => g.Key, g => g.First());
+            .ToDictionary(g => g.Key, g => g.ToList());
 
         var groupIds = schedules.Select(ss => ss.GroupId).Distinct().ToList();
         var groupNames = await context.Groups.AsNoTracking()
@@ -300,15 +300,20 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         var details = rooms.Select(r =>
         {
             var isOccupied = occupiedRoomIds.Contains(r.Id);
-            roomGroupMap.TryGetValue(r.Id, out var sch);
-            groupNameMap.TryGetValue(sch?.GroupId ?? 0, out var groupName);
+            schedulesByRoom.TryGetValue(r.Id, out var roomSchedules);
+            var firstSchedule = roomSchedules?.FirstOrDefault();
+            groupNameMap.TryGetValue(firstSchedule?.GroupId ?? 0, out var groupName);
+            var weekday = firstSchedule?.Weekday;
+            var timeSlot = firstSchedule?.TimeSlot;
             return new RoomDetail
             {
                 Id = r.Id,
                 Name = r.Name,
                 CampusName = r.Campus?.Name ?? string.Empty,
                 IsOccupied = isOccupied,
-                GroupName = groupName
+                GroupName = groupName,
+                Weekday = weekday,
+                TimeSlot = timeSlot
             };
         }).ToList();
 
