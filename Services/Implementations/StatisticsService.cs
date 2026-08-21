@@ -300,6 +300,7 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             .Where(g => allGroupIds.Contains(g.Id))
             .ToListAsync();
         var groupNameMap = allGroups.ToDictionary(g => g.Id, g => g.Name);
+        var groupGenderMap = allGroups.ToDictionary(g => g.Id, g => g.IsFemale);
 
         var details = new List<RoomDetail>();
         foreach (var r in rooms)
@@ -312,6 +313,7 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
                 foreach (var sch in roomSchedules)
                 {
                     groupNameMap.TryGetValue(sch.GroupId, out var name);
+                    groupGenderMap.TryGetValue(sch.GroupId, out var isFemale);
                     details.Add(new RoomDetail
                     {
                         Id = r.Id,
@@ -319,6 +321,7 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
                         CampusName = r.Campus?.Name ?? string.Empty,
                         IsOccupied = true,
                         GroupName = name,
+                        GroupIsFemale = name != null ? isFemale : null,
                         Weekday = sch.Weekday,
                         TimeSlot = sch.TimeSlot
                     });

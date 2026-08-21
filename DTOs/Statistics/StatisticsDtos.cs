@@ -121,6 +121,7 @@ public class RoomDetail
     public string CampusName { get; set; } = string.Empty;
     public bool IsOccupied { get; set; }
     public string? GroupName { get; set; }
+    public bool? GroupIsFemale { get; set; }
     public string? Weekday { get; set; }
     public string? TimeSlot { get; set; }
 }
