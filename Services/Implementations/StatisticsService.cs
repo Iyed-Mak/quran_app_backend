@@ -327,18 +327,35 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
     }
 
     public async Task<AttendanceStatisticsResponse> GetAttendanceStatisticsAsync(
-        string? period, DateOnly? dateFrom, DateOnly? dateTo)
+        string? period, DateOnly? dateFrom, DateOnly? dateTo,
+        int? month, int? year, string? gender)
     {
         var now = DateOnly.FromDateTime(DateTime.UtcNow);
-        var start = period switch
+
+        DateOnly start;
+        DateOnly end;
+
+        if (month.HasValue && year.HasValue)
         {
-            "today" => now,
-            "week" => now.AddDays(-(int)now.DayOfWeek),
-            "month" => new DateOnly(now.Year, now.Month, 1),
-            "custom" when dateFrom.HasValue => dateFrom.Value,
-            _ => now.AddDays(-7)
-        };
-        var end = period == "custom" && dateTo.HasValue ? dateTo.Value : now;
+            start = new DateOnly(year.Value, month.Value, 1);
+            end = start.AddMonths(1).AddDays(-1);
+        }
+        else if (dateFrom.HasValue || dateTo.HasValue)
+        {
+            start = dateFrom ?? now.AddDays(-30);
+            end = dateTo ?? now;
+        }
+        else
+        {
+            start = period switch
+            {
+                "today" => now,
+                "week" => now.AddDays(-(int)now.DayOfWeek),
+                "month" => new DateOnly(now.Year, now.Month, 1),
+                _ => now.AddDays(-7)
+            };
+            end = now;
+        }
 
         var evaluations = await context.DailyEvaluations
             .AsNoTracking()
@@ -351,6 +368,14 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             .Where(s => studentIds.Contains(s.Id))
             .ToListAsync();
         var studentMap = students.ToDictionary(s => s.Id, s => s);
+
+        if (!string.IsNullOrEmpty(gender))
+        {
+            var genderIsFemale = gender == "female";
+            evaluations = evaluations.Where(e =>
+                studentMap.TryGetValue(e.StudentId, out var stu) &&
+                stu.IsFemale == genderIsFemale).ToList();
+        }
 
         var present = 0;
         var absent = 0;
@@ -403,9 +428,39 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         };
     }
 
-    public async Task<AcademicStatisticsResponse> GetAcademicStatisticsAsync()
+    public async Task<AcademicStatisticsResponse> GetAcademicStatisticsAsync(
+        DateOnly? dateFrom, DateOnly? dateTo,
+        int? month, int? year, string? gender)
     {
         var evaluations = await context.DailyEvaluations.AsNoTracking().ToListAsync();
+
+        if (month.HasValue && year.HasValue)
+        {
+            var mStart = new DateOnly(year.Value, month.Value, 1);
+            var mEnd = mStart.AddMonths(1).AddDays(-1);
+            evaluations = evaluations.Where(e => e.SessionDate >= mStart && e.SessionDate <= mEnd).ToList();
+        }
+        else if (dateFrom.HasValue || dateTo.HasValue)
+        {
+            var dFrom = dateFrom ?? new DateOnly(2020, 1, 1);
+            var dTo = dateTo ?? DateOnly.FromDateTime(DateTime.UtcNow);
+            evaluations = evaluations.Where(e => e.SessionDate >= dFrom && e.SessionDate <= dTo).ToList();
+        }
+
+        var evalStudentIds = evaluations.Select(e => e.StudentId).Distinct().ToList();
+        var evalStudents = await context.Students.AsNoTracking()
+            .Include(s => s.Group)
+            .Where(s => evalStudentIds.Contains(s.Id))
+            .ToListAsync();
+        var evalStudentMap = evalStudents.ToDictionary(s => s.Id, s => s);
+
+        if (!string.IsNullOrEmpty(gender))
+        {
+            var genderIsFemale = gender == "female";
+            evaluations = evaluations.Where(e =>
+                evalStudentMap.TryGetValue(e.StudentId, out var stu) &&
+                stu.IsFemale == genderIsFemale).ToList();
+        }
 
         var evalValues = evaluations.Where(e => e.Evaluation.HasValue).Select(e => (double)e.Evaluation!.Value).ToList();
         var avgEvaluation = evalValues.Any() ? Math.Round(evalValues.Average(), 2) : 0;
@@ -427,20 +482,13 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         var lowExamStudents = examResults.Where(r => r.FinalGrade.HasValue && r.FinalGrade < 10)
             .Select(r => r.StudentId).Distinct().Count();
 
-        var studentIds = evaluations.Where(e => e.StudentId != 0).Select(e => e.StudentId).Distinct().ToList();
-        var students = await context.Students.AsNoTracking()
-            .Include(s => s.Group)
-            .Where(s => studentIds.Contains(s.Id))
-            .ToListAsync();
-        var studentMap = students.ToDictionary(s => s.Id, s => s);
-
         var byGroupDict = new Dictionary<int, List<double>>();
         var byGroupMem = new Dictionary<int, List<double>>();
         var byGroupRev = new Dictionary<int, List<double>>();
 
         foreach (var e in evaluations)
         {
-            if (!studentMap.TryGetValue(e.StudentId, out var stu) || !stu.GroupId.HasValue) continue;
+            if (!evalStudentMap.TryGetValue(e.StudentId, out var stu) || !stu.GroupId.HasValue) continue;
             var gid = stu.GroupId.Value;
 
             if (e.Evaluation.HasValue)

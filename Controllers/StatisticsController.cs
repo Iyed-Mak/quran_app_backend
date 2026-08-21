@@ -56,12 +56,20 @@ public class StatisticsController(IStatisticsService service) : ControllerBase
     public async Task<IActionResult> GetAttendance(
         [FromQuery] string? period,
         [FromQuery] DateOnly? dateFrom,
-        [FromQuery] DateOnly? dateTo)
-        => Ok(await service.GetAttendanceStatisticsAsync(period, dateFrom, dateTo));
+        [FromQuery] DateOnly? dateTo,
+        [FromQuery] int? month,
+        [FromQuery] int? year,
+        [FromQuery] string? gender)
+        => Ok(await service.GetAttendanceStatisticsAsync(period, dateFrom, dateTo, month, year, gender));
 
     [HttpGet("academic")]
-    public async Task<IActionResult> GetAcademic()
-        => Ok(await service.GetAcademicStatisticsAsync());
+    public async Task<IActionResult> GetAcademic(
+        [FromQuery] DateOnly? dateFrom,
+        [FromQuery] DateOnly? dateTo,
+        [FromQuery] int? month,
+        [FromQuery] int? year,
+        [FromQuery] string? gender)
+        => Ok(await service.GetAcademicStatisticsAsync(dateFrom, dateTo, month, year, gender));
 
     [HttpGet("exams")]
     public async Task<IActionResult> GetExams(
