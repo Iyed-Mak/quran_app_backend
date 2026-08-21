@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using QuranSchool.Api.Data;
 using QuranSchool.Api.DTOs.Statistics;
@@ -5,8 +7,18 @@ using QuranSchool.Api.Services.Interfaces;
 
 namespace QuranSchool.Api.Services.Implementations;
 
-public class StatisticsService(AppDbContext context) : IStatisticsService
+public partial class StatisticsService(AppDbContext context) : IStatisticsService
 {
+    [GeneratedRegex(@"\d+(\.\d+)?")]
+    private static partial Regex NumberRegex();
+
+    private static double? ExtractNumber(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var m = NumberRegex().Match(s);
+        return m.Success && double.TryParse(m.Value, CultureInfo.InvariantCulture, out var v) ? v : null;
+    }
+
     public async Task<OverviewStatisticsResponse> GetOverviewAsync()
     {
         var students = await context.Students.AsNoTracking().ToListAsync();
@@ -490,12 +502,10 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
         var evalValues = evaluations.Where(e => e.Evaluation.HasValue).Select(e => (double)e.Evaluation!.Value).ToList();
         var avgEvaluation = evalValues.Any() ? Math.Round(evalValues.Average(), 2) : 0;
 
-        var memValues = evaluations.Where(e => !string.IsNullOrEmpty(e.NewMemorization) && double.TryParse(e.NewMemorization, out _))
-            .Select(e => double.Parse(e.NewMemorization!)).ToList();
+        var memValues = evaluations.Select(e => ExtractNumber(e.NewMemorization)).Where(v => v.HasValue).Select(v => v!.Value).ToList();
         var avgMemorization = memValues.Any() ? Math.Round(memValues.Average(), 2) : 0;
 
-        var revValues = evaluations.Where(e => !string.IsNullOrEmpty(e.ReviewQuantity) && double.TryParse(e.ReviewQuantity, out _))
-            .Select(e => double.Parse(e.ReviewQuantity!)).ToList();
+        var revValues = evaluations.Select(e => ExtractNumber(e.ReviewQuantity)).Where(v => v.HasValue).Select(v => v!.Value).ToList();
         var avgReview = revValues.Any() ? Math.Round(revValues.Average(), 2) : 0;
 
         var lowEvalStudents = evaluations.Where(e => e.Evaluation.HasValue && e.Evaluation < 10)
@@ -521,15 +531,17 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
                 byGroupDict.TryAdd(gid, new List<double>());
                 byGroupDict[gid].Add((double)e.Evaluation!.Value);
             }
-            if (!string.IsNullOrEmpty(e.NewMemorization) && double.TryParse(e.NewMemorization, out var mv))
+            var memVal = ExtractNumber(e.NewMemorization);
+            if (memVal.HasValue)
             {
                 byGroupMem.TryAdd(gid, new List<double>());
-                byGroupMem[gid].Add(mv);
+                byGroupMem[gid].Add(memVal.Value);
             }
-            if (!string.IsNullOrEmpty(e.ReviewQuantity) && double.TryParse(e.ReviewQuantity, out var rv))
+            var revVal = ExtractNumber(e.ReviewQuantity);
+            if (revVal.HasValue)
             {
                 byGroupRev.TryAdd(gid, new List<double>());
-                byGroupRev[gid].Add(rv);
+                byGroupRev[gid].Add(revVal.Value);
             }
         }
 
