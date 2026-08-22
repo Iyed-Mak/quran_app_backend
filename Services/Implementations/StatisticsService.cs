@@ -11,10 +11,31 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
 {
     private static readonly Regex NumberRx = new(@"\d+(\.\d+)?", RegexOptions.Compiled);
 
+    private static readonly Dictionary<string, double> ArabicWords = new()
+    {
+        ["ربع"] = 0.25,
+        ["نصف"] = 0.5,
+        ["ثلث"] = 1.0 / 3,
+        ["ثلثين"] = 2.0 / 3,
+        ["حزب"] = 1.0,
+        ["حزبين"] = 2.0,
+        ["ثلاثة أحزاب"] = 3.0,
+        ["صفحة"] = 1.0,
+        ["صفحتين"] = 2.0,
+        ["نصف صفحة"] = 0.5,
+        ["ربع صفحة"] = 0.25,
+        ["سورة"] = 1.0,
+        ["كامل"] = 1.0,
+        ["جزء"] = 1.0,
+        ["نصف جزء"] = 0.5,
+    };
+
     private static double? ExtractNumber(string? s)
     {
         if (string.IsNullOrWhiteSpace(s)) return null;
-        var m = NumberRx.Match(s);
+        var trimmed = s.Trim();
+        if (ArabicWords.TryGetValue(trimmed, out var w)) return w;
+        var m = NumberRx.Match(trimmed);
         return m.Success && double.TryParse(m.Value, CultureInfo.InvariantCulture, out var v) ? v : null;
     }
 
@@ -419,16 +440,18 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
 
         foreach (var e in evaluations)
         {
-            if (e.Attendance == "present") present++;
-            else if (e.Attendance == "absent") absent++;
+            var isPresent = e.Attendance is "present" or "حاضر";
+            var isAbsent = e.Attendance is "absent" or "غائب";
+            if (isPresent) present++;
+            else if (isAbsent) absent++;
 
             if (studentMap.TryGetValue(e.StudentId, out var stu) && stu.GroupId.HasValue)
             {
                 var gid = stu.GroupId.Value;
                 var current = byGroupDict.GetValueOrDefault(gid);
-                if (e.Attendance == "present")
+                if (isPresent)
                     byGroupDict[gid] = (current.present + 1, current.absent);
-                else if (e.Attendance == "absent")
+                else if (isAbsent)
                     byGroupDict[gid] = (current.present, current.absent + 1);
             }
         }
