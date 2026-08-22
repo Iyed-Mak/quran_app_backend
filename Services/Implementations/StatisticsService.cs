@@ -462,15 +462,18 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             .Where(g => groupIds.Contains(g.Id))
             .ToListAsync();
         var groupNameMap = groupNames.ToDictionary(g => g.Id, g => g.Name);
+        var groupGenderMap = groupNames.ToDictionary(g => g.Id, g => g.IsFemale);
 
         var byGroup = byGroupDict.Select(kv =>
         {
             var t = kv.Value.present + kv.Value.absent;
             groupNameMap.TryGetValue(kv.Key, out var name);
+            groupGenderMap.TryGetValue(kv.Key, out var isFemale);
             return new GroupAttendanceDetail
             {
                 GroupId = kv.Key,
                 GroupName = name ?? string.Empty,
+                GroupIsFemale = isFemale,
                 Present = kv.Value.present,
                 Absent = kv.Value.absent,
                 AttendanceRate = t > 0 ? Math.Round((double)kv.Value.present / t * 100, 1) : 0
@@ -572,10 +575,12 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             .Where(g => allGroupIds.Contains(g.Id))
             .ToListAsync();
         var groupNameMap = groupNames.ToDictionary(g => g.Id, g => g.Name);
+        var groupGenderMap = groupNames.ToDictionary(g => g.Id, g => g.IsFemale);
 
         var byGroup = allGroupIds.Select(gid =>
         {
             groupNameMap.TryGetValue(gid, out var name);
+            groupGenderMap.TryGetValue(gid, out var isFemale);
             byGroupDict.TryGetValue(gid, out var ev);
             byGroupMem.TryGetValue(gid, out var mem);
             byGroupRev.TryGetValue(gid, out var rev);
@@ -583,6 +588,7 @@ public class StatisticsService(AppDbContext context) : IStatisticsService
             {
                 GroupId = gid,
                 GroupName = name ?? string.Empty,
+                GroupIsFemale = isFemale,
                 AvgEvaluation = ev != null && ev.Any() ? Math.Round(ev.Average(), 2) : 0,
                 AvgMemorization = mem != null && mem.Any() ? Math.Round(mem.Average(), 2) : 0,
                 AvgReview = rev != null && rev.Any() ? Math.Round(rev.Average(), 2) : 0

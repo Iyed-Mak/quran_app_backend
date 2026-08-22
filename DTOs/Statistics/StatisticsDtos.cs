@@ -140,6 +140,7 @@ public class GroupAttendanceDetail
 {
     public int GroupId { get; set; }
     public string GroupName { get; set; } = string.Empty;
+    public bool GroupIsFemale { get; set; }
     public int Present { get; set; }
     public int Absent { get; set; }
     public double AttendanceRate { get; set; }
@@ -160,6 +161,7 @@ public class GroupAcademicDetail
 {
     public int GroupId { get; set; }
     public string GroupName { get; set; } = string.Empty;
+    public bool GroupIsFemale { get; set; }
     public double AvgEvaluation { get; set; }
     public double AvgMemorization { get; set; }
     public double AvgReview { get; set; }
